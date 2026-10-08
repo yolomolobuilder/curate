@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Curate — Visual Planner for Videos, Articles, Podcasts & Books</title>
+    <meta name="description" content="A visual planner for videos, articles, podcasts and books. Dark editorial design, jewel-tone cards, and drag-and-drop scheduling." />
+    <meta property="og:title" content="Curate — Visual Planner for Videos, Articles, Podcasts & Books" />
+    <meta property="og:description" content="A visual planner for videos, articles, podcasts and books. Dark editorial design, jewel-tone cards, and drag-and-drop scheduling." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" type="image/svg+xml" href="/logo.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+      (function() {
+        try {
+          var saved = localStorage.getItem('curatecal_dark_mode');
+          var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+          if (saved === 'true' || (saved === null && prefersDark)) {
+            document.documentElement.classList.add('dark');
+            document.documentElement.setAttribute('data-theme', 'dark');
+          } else {
+            document.documentElement.classList.remove('dark');
+            document.documentElement.setAttribute('data-theme', 'light');
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body class="antialiased bg-[#FAF9F6] dark:bg-[#0C0C0C] text-stone-900 dark:text-stone-100 selection:bg-amber-200 selection:text-stone-900">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
