@@ -15,7 +15,14 @@ import {
   AlertTriangle,
   Image as ImageIcon,
   Copy,
+  Youtube,
+  RefreshCw,
 } from 'lucide-react';
+import {
+  refreshAllEstimatedYouTubeItems,
+  getYouTubeApiKey,
+} from '../lib/youtubeDuration';
+import { getStoredItems, saveStoredItems } from '../lib/storage';
 import {
   getCustomBrandLogo,
   saveCustomBrandLogo,
@@ -141,9 +148,34 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
     saveStoredDayPreferencesEnabled(next);
   };
 
-  const handleRunSelfCheck = () => {
-    const res = runSelfCheckTests();
+  const handleRunSelfCheck = async () => {
+    const res = await runSelfCheckTests();
     setSelfCheckResult(res);
+  };
+
+  const [isRefreshingYouTube, setIsRefreshingYouTube] = useState(false);
+  const [refreshYouTubeStatus, setRefreshYouTubeStatus] = useState<string | null>(null);
+
+  const handleRefreshYouTubeDurations = async () => {
+    setIsRefreshingYouTube(true);
+    setRefreshYouTubeStatus(null);
+    try {
+      const currentItems = getStoredItems();
+      const res = await refreshAllEstimatedYouTubeItems(currentItems);
+      if (res.error) {
+        setRefreshYouTubeStatus(res.error);
+      } else if (res.updatedCount > 0) {
+        saveStoredItems(res.updatedItems);
+        onDataReloaded();
+        setRefreshYouTubeStatus(`Updated ${res.updatedCount} YouTube duration${res.updatedCount === 1 ? '' : 's'}.`);
+      } else {
+        setRefreshYouTubeStatus('All YouTube durations are up to date or already customized.');
+      }
+    } catch (err: any) {
+      setRefreshYouTubeStatus('Refresh failed: ' + (err?.message || 'unknown error'));
+    } finally {
+      setIsRefreshingYouTube(false);
+    }
   };
 
   const handleExport = () => {
@@ -535,6 +567,44 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
                 </p>
               </div>
             </button>
+
+            {/* Refresh YouTube durations (Requirement 5) */}
+            <div className="p-3.5 rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <span className="font-sans text-xs font-semibold text-stone-900 dark:text-stone-100 flex items-center gap-1.5">
+                    <Youtube className="w-3.5 h-3.5 text-red-600" />
+                    <span>Refresh YouTube durations</span>
+                  </span>
+                  <p className="text-[11px] text-stone-500 mt-0.5">
+                    Fetch real durations for estimated YouTube links using YouTube Data API v3
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleRefreshYouTubeDurations}
+                  disabled={isRefreshingYouTube}
+                  className="px-2.5 py-1 rounded-lg text-xs font-sans font-medium bg-stone-100 hover:bg-stone-200 dark:bg-stone-800 dark:hover:bg-stone-750 text-stone-800 dark:text-stone-200 transition-colors cursor-pointer disabled:opacity-50 flex items-center gap-1.5 shrink-0"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isRefreshingYouTube ? 'animate-spin' : ''}`} />
+                  <span>{isRefreshingYouTube ? 'Refreshing...' : 'Refresh YouTube durations'}</span>
+                </button>
+              </div>
+              {refreshYouTubeStatus && (
+                <div className="pt-2 border-t border-stone-100 dark:border-stone-850 flex items-center justify-between text-[11px]">
+                  <span className="font-mono text-stone-600 dark:text-stone-400">
+                    {refreshYouTubeStatus}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setRefreshYouTubeStatus(null)}
+                    className="text-stone-400 hover:text-stone-600 text-[10px]"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              )}
+            </div>
 
             {/* Analytics & Privacy Instrumentation */}
             <div className="p-3.5 rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 space-y-3">

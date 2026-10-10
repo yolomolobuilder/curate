@@ -22,10 +22,11 @@ import {
   WeekDaySlot,
   getEstimatedDuration,
 } from '../lib/quickPlanner';
-import { formatHoursMinutes } from '../lib/timeAccounting';
+import { formatHoursMinutes, formatDuration } from '../lib/timeAccounting';
 import { getTodayStr } from '../lib/dateUtils';
 import { getStoredDayPreferencesEnabled } from '../lib/storage';
 import { trackEvent } from '../lib/analytics';
+import { DurationBadgeWithPicker } from './DurationEditor';
 
 interface QuickPlanModalProps {
   isOpen: boolean;
@@ -37,6 +38,7 @@ interface QuickPlanModalProps {
   availableBudgetMinutes: number;
   dayThemes: DayTheme[];
   onNavigateNextWeek?: () => void;
+  onUpdateDuration?: (id: string, durationMinutes: number) => void;
 }
 
 export const QuickPlanModal: React.FC<QuickPlanModalProps> = ({
@@ -49,6 +51,7 @@ export const QuickPlanModal: React.FC<QuickPlanModalProps> = ({
   availableBudgetMinutes = 0,
   dayThemes = [],
   onNavigateNextWeek,
+  onUpdateDuration,
 }) => {
   // Default strategy: 'priority_oldest' ("Priority, then oldest", duration breaks ties)
   const [strategy, setStrategy] = useState<PlanningStrategy>('priority_oldest');
@@ -134,15 +137,36 @@ export const QuickPlanModal: React.FC<QuickPlanModalProps> = ({
     setAssignedDays((prev) => ({ ...prev, [itemId]: newDateStr }));
   };
 
+  // Local item overrides (for live duration edits in preview)
+  const [itemDurationOverrides, setItemDurationOverrides] = useState<
+    Record<string, { minutes: number; isEstimate: boolean }>
+  >({});
+
+  const handleUpdateItemDurationInPreview = (itemId: string, minutes: number) => {
+    setItemDurationOverrides((prev) => ({
+      ...prev,
+      [itemId]: { minutes, isEstimate: false },
+    }));
+    onUpdateDuration?.(itemId, minutes);
+  };
+
   // Compute live preview metrics based on user edits
   const activeProposedItems = generatedPlan.proposedItems.filter((pi) =>
     selectedItemIds.has(pi.item.id)
   );
 
-  const proposedNewMinutes = activeProposedItems.reduce(
-    (acc, pi) => acc + getEstimatedDuration(pi.item),
-    0
-  );
+  const proposedNewMinutes = activeProposedItems.reduce((acc, pi) => {
+    const override = itemDurationOverrides[pi.item.id];
+    const mins = override ? override.minutes : getEstimatedDuration(pi.item);
+    return acc + mins;
+  }, 0);
+
+  const proposedTotalCount = activeProposedItems.length;
+  const estimatesCount = activeProposedItems.filter((pi) => {
+    const override = itemDurationOverrides[pi.item.id];
+    if (override) return override.isEstimate;
+    return pi.item.durationIsEstimate !== false;
+  }).length;
 
   const initialMins = generatedPlan.initialScheduledMinutes;
   const projectedTotal = initialMins + proposedNewMinutes;
@@ -187,7 +211,7 @@ export const QuickPlanModal: React.FC<QuickPlanModalProps> = ({
 
         {/* Live Metrics HUD */}
         <div className="px-5 sm:px-6 py-3 bg-stone-100/70 dark:bg-stone-900/60 border-b border-stone-200/60 dark:border-stone-800/60 flex flex-wrap items-center justify-between gap-3 text-xs">
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-4 flex-wrap">
             <div>
               <span className="text-[10px] font-mono text-stone-400 uppercase block">Selected</span>
               <span className="font-medium text-stone-900 dark:text-stone-100">
@@ -208,9 +232,19 @@ export const QuickPlanModal: React.FC<QuickPlanModalProps> = ({
                 {isOverBudget ? `Over budget (+${formatHoursMinutes(projectedTotal - availableBudgetMinutes)})` : formatHoursMinutes(remainingAfterPlan)}
               </span>
             </div>
+            {proposedTotalCount > 0 && (
+              <>
+                <div className="h-6 w-px bg-stone-200 dark:bg-stone-800" />
+                <div>
+                  <span className="text-[10px] font-mono text-stone-400 uppercase block">Estimates</span>
+                  <span className="font-medium text-stone-900 dark:text-stone-100">
+                    {estimatesCount} of {proposedTotalCount} are estimates
+                  </span>
+                </div>
+              </>
+            )}
           </div>
 
-          {/* Advanced toggle */}
           <button
             type="button"
             onClick={() => setShowAdvanced(!showAdvanced)}
@@ -302,13 +336,24 @@ export const QuickPlanModal: React.FC<QuickPlanModalProps> = ({
             </div>
           ) : (
             <div className="space-y-3">
-              <span className="text-[11px] font-mono uppercase tracking-wider text-stone-400 block">
-                Proposed Schedule ({activeProposedItems.length} items to add)
-              </span>
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-mono uppercase tracking-wider text-stone-400 block">
+                  Proposed Schedule ({activeProposedItems.length} items to add)
+                </span>
+                {proposedTotalCount > 0 && (
+                  <span className="text-[11px] font-mono text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 px-2 py-0.5 rounded-md border border-amber-200 dark:border-amber-800">
+                    {estimatesCount} of {proposedTotalCount} are estimates
+                  </span>
+                )}
+              </div>
 
               {generatedPlan.proposedItems.map((pi) => {
                 const isChecked = selectedItemIds.has(pi.item.id);
                 const currentDay = assignedDays[pi.item.id] || pi.targetDateStr;
+                const override = itemDurationOverrides[pi.item.id];
+                const effectiveItem = override
+                  ? { ...pi.item, durationMinutes: override.minutes, durationIsEstimate: override.isEstimate }
+                  : pi.item;
 
                 return (
                   <div
@@ -347,10 +392,14 @@ export const QuickPlanModal: React.FC<QuickPlanModalProps> = ({
                           </h4>
                         </div>
 
-                        <div className="flex items-center gap-2 text-xs text-stone-500 font-sans mt-0.5">
+                        <div className="flex items-center gap-2 text-xs text-stone-500 font-sans mt-0.5 flex-wrap">
                           <span className="capitalize">{pi.item.contentType}</span>
                           <span>·</span>
-                          <span className="font-mono tabular-nums">{getEstimatedDuration(pi.item)}m</span>
+                          <DurationBadgeWithPicker
+                            item={effectiveItem}
+                            onUpdateDuration={handleUpdateItemDurationInPreview}
+                            className="text-stone-600 dark:text-stone-300 font-mono"
+                          />
                           <span>·</span>
                           <span className="truncate max-w-[140px] text-stone-400">
                             {pi.item.source || pi.item.author || 'Curate'}

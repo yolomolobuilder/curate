@@ -141,6 +141,60 @@ export function migrateItem(raw: any): ContentItem {
       typeof raw?.durationMinutes === 'number' && !isNaN(raw.durationMinutes) && raw.durationMinutes > 0
         ? Math.round(raw.durationMinutes)
         : undefined,
+    durationIsEstimate: (() => {
+      if (typeof raw?.durationIsEstimate === 'boolean') {
+        return raw.durationIsEstimate;
+      }
+      if (
+        raw?.durationUserEdited === true ||
+        raw?.isDurationEdited === true ||
+        raw?.durationEdited === true ||
+        (Array.isArray(raw?.userEditedFields) && raw.userEditedFields.includes('durationMinutes')) ||
+        (Array.isArray(raw?.editedFields) && raw.editedFields.includes('durationMinutes'))
+      ) {
+        return false;
+      }
+      // Schema migration: existing auto-filled durations become true; durations the user edited are false
+      return true;
+    })(),
+    durationFetchedAt:
+      typeof raw?.durationFetchedAt === 'string' && raw.durationFetchedAt.trim().length > 0
+        ? raw.durationFetchedAt
+        : undefined,
+    userEditedFields: (() => {
+      const existing = Array.isArray(raw?.userEditedFields)
+        ? [...raw.userEditedFields]
+        : Array.isArray(raw?.editedFields)
+        ? [...raw.editedFields]
+        : [];
+      if (
+        (raw?.durationUserEdited === true ||
+          raw?.isDurationEdited === true ||
+          raw?.durationEdited === true ||
+          raw?.durationIsEstimate === false) &&
+        !existing.includes('durationMinutes')
+      ) {
+        existing.push('durationMinutes');
+      }
+      return existing;
+    })(),
+    editedFields: (() => {
+      const existing = Array.isArray(raw?.userEditedFields)
+        ? [...raw.userEditedFields]
+        : Array.isArray(raw?.editedFields)
+        ? [...raw.editedFields]
+        : [];
+      if (
+        (raw?.durationUserEdited === true ||
+          raw?.isDurationEdited === true ||
+          raw?.durationEdited === true ||
+          raw?.durationIsEstimate === false) &&
+        !existing.includes('durationMinutes')
+      ) {
+        existing.push('durationMinutes');
+      }
+      return existing;
+    })(),
     topic: typeof raw?.topic === 'string' ? raw.topic : undefined,
     status: ['inbox', 'planned', 'in_progress', 'completed'].includes(raw?.status)
       ? raw.status
@@ -432,6 +486,9 @@ export function generateCuratedStarterPack(): ContentItem[] {
       platform: 'YouTube',
       author: 'Growth Marketing Lab',
       durationMinutes: 42,
+      durationIsEstimate: true,
+      userEditedFields: [],
+      editedFields: [],
       topic: 'Marketing',
       status: 'planned',
       scheduledDate: getDateStr(0), // Today
@@ -450,6 +507,9 @@ export function generateCuratedStarterPack(): ContentItem[] {
       platform: 'Harvard Business Review',
       author: 'Prof. Dan Ariely',
       durationMinutes: 14,
+      durationIsEstimate: true,
+      userEditedFields: [],
+      editedFields: [],
       topic: 'Psychology',
       status: 'planned',
       scheduledDate: getDateStr(0), // Today
@@ -467,6 +527,9 @@ export function generateCuratedStarterPack(): ContentItem[] {
       platform: 'YouTube',
       author: 'Refactoring UI',
       durationMinutes: 28,
+      durationIsEstimate: true,
+      userEditedFields: [],
+      editedFields: [],
       topic: 'UX/UI',
       status: 'planned',
       scheduledDate: getDateStr(1), // Tomorrow
@@ -484,6 +547,9 @@ export function generateCuratedStarterPack(): ContentItem[] {
       platform: 'Penguin Portfolio',
       author: 'Annie Duke',
       durationMinutes: 180,
+      durationIsEstimate: true,
+      userEditedFields: [],
+      editedFields: [],
       topic: 'Economics',
       status: 'in_progress',
       scheduledDate: getDateStr(2),
@@ -503,6 +569,9 @@ export function generateCuratedStarterPack(): ContentItem[] {
       platform: 'YouTube',
       author: 'Easy German',
       durationMinutes: 35,
+      durationIsEstimate: true,
+      userEditedFields: [],
+      editedFields: [],
       topic: 'German',
       status: 'completed',
       scheduledDate: getDateStr(-1), // Yesterday
@@ -522,6 +591,9 @@ export function generateCuratedStarterPack(): ContentItem[] {
       platform: 'Spotify',
       author: 'Dr. Andrew Huberman',
       durationMinutes: 65,
+      durationIsEstimate: true,
+      userEditedFields: [],
+      editedFields: [],
       topic: 'Health',
       status: 'planned',
       scheduledDate: getDateStr(4),
@@ -539,6 +611,9 @@ export function generateCuratedStarterPack(): ContentItem[] {
       platform: 'Cognitive Systems Lab',
       author: 'Richard I. Cook, MD',
       durationMinutes: 20,
+      durationIsEstimate: true,
+      userEditedFields: [],
+      editedFields: [],
       topic: 'Deep Dive',
       status: 'inbox', // In Inbox!
       notes: 'Catastrophic failures in safety-critical engineering.',
@@ -555,6 +630,9 @@ export function generateCuratedStarterPack(): ContentItem[] {
       platform: 'Documentary Archive',
       author: 'Roger Deakins ASC',
       durationMinutes: 85,
+      durationIsEstimate: true,
+      userEditedFields: [],
+      editedFields: [],
       topic: 'Culture',
       status: 'inbox', // In Inbox!
       notes: 'Lighting rigs, silhouette framing, and practical sets.',

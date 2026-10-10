@@ -1,5 +1,6 @@
-import { ContentType } from '../types';
+import { ContentType, ContentItem } from '../types';
 import { trackEvent } from './analytics';
+import { fetchYouTubeDurationsBatch } from './youtubeDuration';
 
 export interface ExtractedMetadata {
   title: string;
@@ -9,6 +10,8 @@ export interface ExtractedMetadata {
   platform: string;
   author: string;
   durationMinutes?: number;
+  durationIsEstimate?: boolean;
+  durationFetchedAt?: string;
   description?: string;
   topic?: string;
 }
@@ -208,6 +211,22 @@ export async function extractMetadata(urlInput: string): Promise<ExtractedMetada
 
     const topic = detectTopic(`${title} ${trimmed}`);
 
+    let durationMinutes = isPodcast ? 55 : 28;
+    let durationIsEstimate = true;
+    let durationFetchedAt: string | undefined = undefined;
+
+    try {
+      const ytDurations = await fetchYouTubeDurationsBatch([ytId]);
+      const ytResult = ytDurations.get(ytId);
+      if (ytResult && typeof ytResult.durationMinutes === 'number' && ytResult.durationMinutes > 0) {
+        durationMinutes = ytResult.durationMinutes;
+        durationIsEstimate = false;
+        durationFetchedAt = ytResult.fetchedAt || new Date().toISOString();
+      }
+    } catch {
+      // Offline / error: stays estimate
+    }
+
     return {
       title,
       thumbnailUrl,
@@ -215,7 +234,9 @@ export async function extractMetadata(urlInput: string): Promise<ExtractedMetada
       source: author || 'YouTube',
       platform: 'YouTube',
       author,
-      durationMinutes: isPodcast ? 55 : 28,
+      durationMinutes,
+      durationIsEstimate,
+      durationFetchedAt,
       topic,
     };
   }
@@ -299,3 +320,53 @@ export async function extractMetadata(urlInput: string): Promise<ExtractedMetada
     topic,
   };
 }
+
+/**
+ * Merges freshly fetched metadata into an existing item, ensuring user-edited fields
+ * (title, contentType, source, durationMinutes) are NEVER overwritten.
+ */
+export function mergeRefetchedMetadata(
+  item: ContentItem,
+  meta: ExtractedMetadata
+): ContentItem {
+  const edited = new Set<string>([
+    ...(item.userEditedFields || []),
+    ...(item.editedFields || []),
+  ]);
+
+  // If durationIsEstimate is false, consider duration as user-edited
+  const isDurationEdited = item.durationIsEstimate === false || edited.has('durationMinutes');
+  const isTitleEdited = edited.has('title');
+  const isTypeEdited = edited.has('contentType');
+  const isSourceEdited = edited.has('source');
+
+  const finalUserEditedFields = Array.from(edited);
+
+  return {
+    ...item,
+    title: isTitleEdited ? item.title : meta.title || item.title,
+    contentType: isTypeEdited ? item.contentType : meta.contentType || item.contentType,
+    source: isSourceEdited ? item.source : meta.source || item.source,
+    platform: isSourceEdited ? item.platform : meta.platform || item.platform,
+    author: isSourceEdited ? item.author : meta.author || item.author,
+    durationMinutes: isDurationEdited
+      ? item.durationMinutes
+      : meta.durationMinutes ?? item.durationMinutes,
+    durationIsEstimate: isDurationEdited ? false : (meta.durationIsEstimate !== undefined ? meta.durationIsEstimate : true),
+    durationFetchedAt: isDurationEdited ? item.durationFetchedAt : (meta.durationFetchedAt || item.durationFetchedAt),
+    userEditedFields: finalUserEditedFields,
+    editedFields: finalUserEditedFields,
+    thumbnailUrl: item.thumbnailUrl || meta.thumbnailUrl,
+    topic: item.topic || meta.topic,
+  };
+}
+
+/**
+ * Refetches metadata for an item from its URL, preserving all user-edited fields.
+ */
+export async function refetchItemMetadata(item: ContentItem): Promise<ContentItem> {
+  if (!item.url) return item;
+  const meta = await extractMetadata(item.url);
+  return mergeRefetchedMetadata(item, meta);
+}
+

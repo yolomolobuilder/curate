@@ -2,12 +2,14 @@ import React, { useState } from 'react';
 import { Check, ExternalLink, Star } from 'lucide-react';
 import { ContentItem, getItemSource } from '../types';
 import { formatDuration } from '../lib/timeAccounting';
+import { DurationBadgeWithPicker } from './DurationEditor';
 
 interface ContentCardProps {
   item: ContentItem;
   onSelect: (item: ContentItem) => void;
   onToggleComplete: (id: string, e: React.MouseEvent) => void;
   onTogglePriority?: (id: string, e: React.MouseEvent) => void;
+  onUpdateDuration?: (id: string, durationMinutes: number) => void;
   compact?: boolean;
   variant?: 'visual' | 'text-only';
   disableDrag?: boolean;
@@ -18,6 +20,7 @@ export const ContentCard: React.FC<ContentCardProps> = ({
   onSelect,
   onToggleComplete,
   onTogglePriority,
+  onUpdateDuration,
   compact = false,
   variant = 'visual',
   disableDrag = false,
@@ -101,11 +104,11 @@ export const ContentCard: React.FC<ContentCardProps> = ({
           <span className="truncate max-w-[65%] font-medium">
             {source} <span className="opacity-40 font-normal">·</span> <span className="capitalize opacity-75 font-normal">{item.contentType}</span>
           </span>
-          {item.durationMinutes && (
-            <span className="font-mono tabular-nums text-stone-500 dark:text-stone-400 shrink-0">
-              {formatDuration(item.durationMinutes)}
-            </span>
-          )}
+          <DurationBadgeWithPicker
+            item={item}
+            onUpdateDuration={onUpdateDuration}
+            className="text-stone-500 dark:text-stone-400 shrink-0"
+          />
         </div>
       </div>
     );
@@ -216,11 +219,11 @@ export const ContentCard: React.FC<ContentCardProps> = ({
           <span className="truncate max-w-[70%] font-medium">
             {source} <span className="opacity-40 font-normal">·</span> <span className="capitalize opacity-75 font-normal">{item.contentType}</span>
           </span>
-          {item.durationMinutes && (
-            <span className="font-mono tabular-nums text-xs text-stone-500 dark:text-stone-400 shrink-0">
-              {formatDuration(item.durationMinutes)}
-            </span>
-          )}
+          <DurationBadgeWithPicker
+            item={item}
+            onUpdateDuration={onUpdateDuration}
+            className="text-stone-500 dark:text-stone-400 shrink-0"
+          />
         </div>
       </div>
     </div>

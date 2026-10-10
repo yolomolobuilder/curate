@@ -23,6 +23,8 @@ export const QuickAddBar: React.FC<QuickAddBarProps> = ({
     platform: string;
     author: string;
     durationMinutes?: number;
+    durationIsEstimate?: boolean;
+    durationFetchedAt?: string;
     topic?: string;
   } | null>(null);
 
@@ -40,6 +42,8 @@ export const QuickAddBar: React.FC<QuickAddBarProps> = ({
           platform: meta.platform,
           author: meta.author,
           durationMinutes: meta.durationMinutes,
+          durationIsEstimate: meta.durationIsEstimate,
+          durationFetchedAt: meta.durationFetchedAt,
           topic: meta.topic,
         });
       } catch (err) {
@@ -59,6 +63,7 @@ export const QuickAddBar: React.FC<QuickAddBarProps> = ({
 
   const handleSaveToInbox = () => {
     if (!previewItem) return;
+    const isEstimate = previewItem.durationIsEstimate !== false;
     onAddItem({
       url: url.trim(),
       title: previewItem.title,
@@ -67,6 +72,10 @@ export const QuickAddBar: React.FC<QuickAddBarProps> = ({
       platform: previewItem.platform,
       author: previewItem.author,
       durationMinutes: previewItem.durationMinutes,
+      durationIsEstimate: isEstimate,
+      durationFetchedAt: previewItem.durationFetchedAt,
+      userEditedFields: isEstimate ? [] : ['durationMinutes'],
+      editedFields: isEstimate ? [] : ['durationMinutes'],
       topic: previewItem.topic,
       status: 'inbox',
     }, 'quick_add');
@@ -76,6 +85,7 @@ export const QuickAddBar: React.FC<QuickAddBarProps> = ({
   const handleSaveForToday = () => {
     if (!previewItem) return;
     const todayStr = getTodayStr();
+    const isEstimate = previewItem.durationIsEstimate !== false;
     onAddItem({
       url: url.trim(),
       title: previewItem.title,
@@ -84,6 +94,10 @@ export const QuickAddBar: React.FC<QuickAddBarProps> = ({
       platform: previewItem.platform,
       author: previewItem.author,
       durationMinutes: previewItem.durationMinutes,
+      durationIsEstimate: isEstimate,
+      durationFetchedAt: previewItem.durationFetchedAt,
+      userEditedFields: isEstimate ? [] : ['durationMinutes'],
+      editedFields: isEstimate ? [] : ['durationMinutes'],
       topic: previewItem.topic,
       status: 'planned',
       scheduledDate: todayStr,

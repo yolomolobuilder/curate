@@ -36,6 +36,7 @@ interface CalendarGridProps {
   onApplyQuickPlan?: (assignments: { itemId: string; targetDateStr: string }[]) => void;
   onOpenQuickPlan?: (budgetMins?: number) => void;
   onOpenWeeklyReview?: () => void;
+  onUpdateDuration?: (id: string, durationMinutes: number) => void;
 }
 
 export const CalendarGrid: React.FC<CalendarGridProps> = ({
@@ -46,6 +47,7 @@ export const CalendarGrid: React.FC<CalendarGridProps> = ({
   onSelectCard,
   onToggleComplete,
   onTogglePriority,
+  onUpdateDuration,
   onMoveItemToDate,
   onAddNewItemToDate,
   onAddForDate,
@@ -388,6 +390,7 @@ export const CalendarGrid: React.FC<CalendarGridProps> = ({
                     onSelect={onSelectCard}
                     onToggleComplete={onToggleComplete}
                     onTogglePriority={onTogglePriority}
+                    onUpdateDuration={onUpdateDuration}
                   />
                 );
               })}
@@ -622,6 +625,7 @@ export const CalendarGrid: React.FC<CalendarGridProps> = ({
                             onSelect={onSelectCard}
                             onToggleComplete={onToggleComplete}
                             onTogglePriority={onTogglePriority}
+                            onUpdateDuration={onUpdateDuration}
                             compact
                           />
                         );
@@ -738,6 +742,7 @@ export const CalendarGrid: React.FC<CalendarGridProps> = ({
                       onSelect={onSelectCard}
                       onToggleComplete={onToggleComplete}
                       onTogglePriority={onTogglePriority}
+                      onUpdateDuration={onUpdateDuration}
                       compact
                       variant={monthlyStyle}
                     />

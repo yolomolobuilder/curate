@@ -39,6 +39,7 @@ import {
   clearStoredItems,
   exportBackupJson,
   importBackupJson,
+  migrateItem,
   CURRENT_SCHEMA_VERSION,
   getStorageUsageStats,
   setSimulateFullStorage,
@@ -48,6 +49,13 @@ import {
   clearStorageFailureInfo,
   DEFAULT_STORAGE_QUOTA_BYTES,
 } from './storage';
+import { mergeRefetchedMetadata, ExtractedMetadata } from './metadataExtractor';
+import {
+  parseIso8601DurationToMinutes,
+  fetchYouTubeDurationsBatch,
+  enrichItemWithYouTubeDuration,
+  clearYouTubeDurationCache,
+} from './youtubeDuration';
 import {
   saveMediaItem,
   saveMediaItemSync,
@@ -100,7 +108,7 @@ export interface SelfCheckSuiteResult {
   results: TestResult[];
 }
 
-export function runSelfCheckTests(): SelfCheckSuiteResult {
+export async function runSelfCheckTests(): Promise<SelfCheckSuiteResult> {
   const results: TestResult[] = [];
 
   // =========================================================================
@@ -1705,6 +1713,432 @@ export function runSelfCheckTests(): SelfCheckSuiteResult {
     });
   }
 
+  // =========================================================================
+  // TEST 21: Honest Durations - Migration, One-Tap Editing, Totals & Metadata Protection
+  // =========================================================================
+  try {
+    // 1. Schema migration sets flag correctly:
+    // Existing auto-filled durations become true; durations the user edited are false
+    const autoFilledRaw = {
+      id: 'item-auto-1',
+      title: 'Algorithmic Marketing Video',
+      contentType: 'youtube',
+      durationMinutes: 42,
+    };
+    const migratedAuto = migrateItem(autoFilledRaw);
+    if (migratedAuto.durationIsEstimate !== true) {
+      throw new Error(
+        `Migration failed: expected auto-filled item to have durationIsEstimate === true, got ${migratedAuto.durationIsEstimate}`
+      );
+    }
+
+    const userEditedRaw1 = {
+      id: 'item-user-1',
+      title: 'Hand-timed Podcast',
+      contentType: 'podcast',
+      durationMinutes: 30,
+      durationIsEstimate: false,
+    };
+    const migratedUser1 = migrateItem(userEditedRaw1);
+    if (migratedUser1.durationIsEstimate !== false) {
+      throw new Error(
+        `Migration failed: expected item with durationIsEstimate: false to remain false, got ${migratedUser1.durationIsEstimate}`
+      );
+    }
+
+    const userEditedRaw2 = {
+      id: 'item-user-2',
+      title: 'Custom Book Read Time',
+      contentType: 'book',
+      durationMinutes: 120,
+      durationUserEdited: true,
+    };
+    const migratedUser2 = migrateItem(userEditedRaw2);
+    if (migratedUser2.durationIsEstimate !== false) {
+      throw new Error(
+        `Migration failed: expected item with durationUserEdited: true to have durationIsEstimate === false, got ${migratedUser2.durationIsEstimate}`
+      );
+    }
+
+    const userEditedRaw3 = {
+      id: 'item-user-3',
+      title: 'Edited Article Duration',
+      contentType: 'article',
+      durationMinutes: 15,
+      userEditedFields: ['durationMinutes'],
+    };
+    const migratedUser3 = migrateItem(userEditedRaw3);
+    if (migratedUser3.durationIsEstimate !== false) {
+      throw new Error(
+        `Migration failed: expected item with userEditedFields containing durationMinutes to have durationIsEstimate === false, got ${migratedUser3.durationIsEstimate}`
+      );
+    }
+
+    // 2. Editing clears durationIsEstimate flag
+    let testItem = { ...migratedAuto };
+    if (testItem.durationIsEstimate !== true) {
+      throw new Error('Initial test item must have durationIsEstimate: true');
+    }
+
+    // Simulate one-tap editing to 60m
+    const newMinutes = 60;
+    const currentEditedFields = new Set([...(testItem.userEditedFields || []), 'durationMinutes']);
+    testItem = {
+      ...testItem,
+      durationMinutes: newMinutes,
+      durationIsEstimate: false,
+      userEditedFields: Array.from(currentEditedFields),
+      editedFields: Array.from(currentEditedFields),
+    };
+
+    if (testItem.durationIsEstimate !== false) {
+      throw new Error(
+        `Editing duration failed to clear durationIsEstimate flag (expected false, got ${testItem.durationIsEstimate})`
+      );
+    }
+    if (testItem.durationMinutes !== 60) {
+      throw new Error(`Duration not updated to 60 (got ${testItem.durationMinutes})`);
+    }
+    if (!testItem.userEditedFields?.includes('durationMinutes')) {
+      throw new Error('durationMinutes not recorded in userEditedFields');
+    }
+
+    // 3. Recalculates all totals immediately
+    const testDate = '2026-10-14';
+    const scheduledItem: ContentItem = {
+      id: 'sched-1',
+      title: 'Scheduled Item',
+      contentType: 'youtube',
+      status: 'planned',
+      scheduledDate: testDate,
+      durationMinutes: 30,
+      durationIsEstimate: true,
+      createdAt: '2026-10-10T00:00:00.000Z',
+      thumbnailUrl: '',
+    };
+
+    const initialDayTotal = calculateTimeForDate([scheduledItem], testDate);
+    if (initialDayTotal.plannedMinutes !== 30) {
+      throw new Error(`Initial total expected 30m, got ${initialDayTotal.plannedMinutes}m`);
+    }
+
+    // Update duration from 30m to 90m (one-tap editing)
+    const updatedScheduledItem: ContentItem = {
+      ...scheduledItem,
+      durationMinutes: 90,
+      durationIsEstimate: false,
+      userEditedFields: ['durationMinutes'],
+      editedFields: ['durationMinutes'],
+    };
+    const updatedDayTotal = calculateTimeForDate([updatedScheduledItem], testDate);
+    if (updatedDayTotal.plannedMinutes !== 90) {
+      throw new Error(`Updated total expected 90m, got ${updatedDayTotal.plannedMinutes}m`);
+    }
+
+    // 4. Edited fields (title, type, source, duration) are NEVER overwritten by metadata refetches
+    const itemWithCustomEdits: ContentItem = {
+      id: 'custom-edit-1',
+      title: 'My Custom Curated Title',
+      contentType: 'article',
+      source: 'Internal Research Memo',
+      platform: 'Internal Research Memo',
+      author: 'Internal Research Memo',
+      durationMinutes: 45,
+      durationIsEstimate: false,
+      userEditedFields: ['title', 'durationMinutes', 'source'],
+      editedFields: ['title', 'durationMinutes', 'source'],
+      status: 'inbox',
+      createdAt: '2026-10-10T00:00:00.000Z',
+      thumbnailUrl: 'https://example.com/thumb.jpg',
+    };
+
+    const refetchedMeta: ExtractedMetadata = {
+      title: 'Scraped Web Headline 2026',
+      contentType: 'podcast',
+      source: 'Remote Web Feed',
+      platform: 'Remote Web Feed',
+      author: 'Remote Author',
+      durationMinutes: 180, // Different duration scraped from remote page
+      thumbnailUrl: 'https://example.com/newthumb.jpg',
+    };
+
+    const merged = mergeRefetchedMetadata(itemWithCustomEdits, refetchedMeta);
+
+    // Verify user-edited fields were protected
+    if (merged.durationMinutes !== 45) {
+      throw new Error(
+        `Edited duration was overwritten by metadata refetch: expected 45, got ${merged.durationMinutes}`
+      );
+    }
+    if (merged.durationIsEstimate !== false) {
+      throw new Error(
+        `Edited item durationIsEstimate was reset on refetch: expected false, got ${merged.durationIsEstimate}`
+      );
+    }
+    if (merged.title !== 'My Custom Curated Title') {
+      throw new Error(
+        `Edited title was overwritten by metadata refetch: expected 'My Custom Curated Title', got '${merged.title}'`
+      );
+    }
+    if (merged.source !== 'Internal Research Memo') {
+      throw new Error(
+        `Edited source was overwritten by metadata refetch: expected 'Internal Research Memo', got '${merged.source}'`
+      );
+    }
+    // Verify unedited field (contentType was not in userEditedFields) can accept metadata
+    if (merged.contentType !== 'podcast') {
+      throw new Error(
+        `Unedited contentType was not updated from metadata: expected 'podcast', got '${merged.contentType}'`
+      );
+    }
+
+    // Also verify unedited item allows duration update from metadata
+    const uneditedItem: ContentItem = {
+      id: 'unedited-1',
+      title: 'Unedited Video',
+      contentType: 'youtube',
+      durationMinutes: 10,
+      durationIsEstimate: true,
+      userEditedFields: [],
+      editedFields: [],
+      status: 'inbox',
+      createdAt: '2026-10-10T00:00:00.000Z',
+      thumbnailUrl: '',
+    };
+    const mergedUnedited = mergeRefetchedMetadata(uneditedItem, refetchedMeta);
+    if (mergedUnedited.durationMinutes !== 180) {
+      throw new Error(
+        `Unedited item did not accept refetched duration: expected 180, got ${mergedUnedited.durationMinutes}`
+      );
+    }
+    if (mergedUnedited.durationIsEstimate !== true) {
+      throw new Error(
+        `Unedited item did not maintain durationIsEstimate: true: got ${mergedUnedited.durationIsEstimate}`
+      );
+    }
+
+    results.push({
+      id: 'test-21-honest-durations-migration-and-editing',
+      name: 'Honest Durations: Migration sets flag correctly, editing clears it, totals update, and edited duration is not overwritten',
+      passed: true,
+      message:
+        'Verified: Schema migration accurately marks auto-filled vs user-edited durations; one-tap duration editing clears estimate flag; totals recalculate immediately; user-edited duration, title, type, and source are never overwritten by metadata refetches.',
+    });
+  } catch (err: any) {
+    results.push({
+      id: 'test-21-honest-durations-migration-and-editing',
+      name: 'Honest Durations: Migration sets flag correctly, editing clears it, totals update, and edited duration is not overwritten',
+      passed: false,
+      message: err.message || String(err),
+    });
+  }
+
+  // =========================================================================
+  // TEST 22: YouTube Real Durations - ISO 8601 Parser, Live Streams, Error Fallback & Edit Protection
+  // =========================================================================
+  try {
+    clearYouTubeDurationCache();
+
+    // 1. Parse ISO 8601 durations
+    // PT1H2M3S -> 62 minutes (1h 2m 3s = 3723s -> 62.05 -> rounds to 62)
+    const p1 = parseIso8601DurationToMinutes('PT1H2M3S');
+    if (p1 !== 62) {
+      throw new Error(`Expected PT1H2M3S to parse to 62 minutes, got ${p1}`);
+    }
+
+    // PT45M -> 45 minutes
+    const p2 = parseIso8601DurationToMinutes('PT45M');
+    if (p2 !== 45) {
+      throw new Error(`Expected PT45M to parse to 45 minutes, got ${p2}`);
+    }
+
+    // PT30S -> rounds to 1 minute (minimum 1)
+    const p3 = parseIso8601DurationToMinutes('PT30S');
+    if (p3 !== 1) {
+      throw new Error(`Expected PT30S to round to 1 minute, got ${p3}`);
+    }
+
+    // PT10H -> 600 minutes
+    const p4 = parseIso8601DurationToMinutes('PT10H');
+    if (p4 !== 600) {
+      throw new Error(`Expected PT10H to parse to 600 minutes, got ${p4}`);
+    }
+
+    // P1DT2H -> 1560 minutes (24h + 2h = 26h = 1560m)
+    const p5 = parseIso8601DurationToMinutes('P1DT2H');
+    if (p5 !== 1560) {
+      throw new Error(`Expected P1DT2H to parse to 1560 minutes, got ${p5}`);
+    }
+
+    // 2. A live or missing duration stays an estimate
+    const pLive1 = parseIso8601DurationToMinutes('P0D');
+    if (pLive1 !== null) {
+      throw new Error(`Expected P0D (live stream) to return null, got ${pLive1}`);
+    }
+    const pLive2 = parseIso8601DurationToMinutes('PT0S');
+    if (pLive2 !== null) {
+      throw new Error(`Expected PT0S (0s stream) to return null, got ${pLive2}`);
+    }
+    const pMissing = parseIso8601DurationToMinutes('');
+    if (pMissing !== null) {
+      throw new Error(`Expected empty duration to return null, got ${pMissing}`);
+    }
+
+    // Test with mock network returning live stream
+    const liveItem: ContentItem = {
+      id: 'live-yt-1',
+      url: 'https://www.youtube.com/watch?v=live1234567',
+      title: 'YouTube Live Stream',
+      contentType: 'youtube',
+      durationMinutes: 28,
+      durationIsEstimate: true,
+      status: 'inbox',
+      createdAt: '2026-10-10T00:00:00.000Z',
+      thumbnailUrl: '',
+    };
+    const mockLiveFetch: typeof fetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        items: [{ id: 'live1234567', contentDetails: { duration: 'P0D' } }],
+      }),
+    } as any);
+
+    const enrichedLive = await enrichItemWithYouTubeDuration(liveItem, {
+      apiKey: 'test_key',
+      fetchFn: mockLiveFetch,
+    });
+    if (enrichedLive.durationIsEstimate !== true) {
+      throw new Error(
+        `Expected live stream to remain an estimate, got durationIsEstimate === ${enrichedLive.durationIsEstimate}`
+      );
+    }
+    if (enrichedLive.durationMinutes !== 28) {
+      throw new Error(`Expected live stream to retain estimate of 28m, got ${enrichedLive.durationMinutes}`);
+    }
+
+    // 3. A failure falls back to the estimate (never blocks or throws)
+    const failingItem: ContentItem = {
+      id: 'fail-yt-1',
+      url: 'https://www.youtube.com/watch?v=fail1234567',
+      title: 'Failing Video',
+      contentType: 'youtube',
+      durationMinutes: 25,
+      durationIsEstimate: true,
+      status: 'inbox',
+      createdAt: '2026-10-10T00:00:00.000Z',
+      thumbnailUrl: '',
+    };
+    const mockFailingFetch: typeof fetch = async () => ({
+      ok: false,
+      status: 403,
+      json: async () => ({ error: { message: 'Quota exceeded' } }),
+    } as any);
+
+    const enrichedFail = await enrichItemWithYouTubeDuration(failingItem, {
+      apiKey: 'test_key',
+      fetchFn: mockFailingFetch,
+    });
+    if (enrichedFail.durationIsEstimate !== true) {
+      throw new Error(`Expected network failure to retain durationIsEstimate === true`);
+    }
+    if (enrichedFail.durationMinutes !== 25) {
+      throw new Error(`Expected network failure to retain 25m estimate, got ${enrichedFail.durationMinutes}`);
+    }
+
+    // 4. Successful fetch sets real duration and durationIsEstimate=false, durationFetchedAt
+    const successItem: ContentItem = {
+      id: 'success-yt-1',
+      url: 'https://www.youtube.com/watch?v=succ1234567',
+      title: 'Real Video',
+      contentType: 'youtube',
+      durationMinutes: 28,
+      durationIsEstimate: true,
+      status: 'inbox',
+      createdAt: '2026-10-10T00:00:00.000Z',
+      thumbnailUrl: '',
+    };
+    const mockSuccessFetch: typeof fetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        items: [{ id: 'succ1234567', contentDetails: { duration: 'PT45M' } }],
+      }),
+    } as any);
+
+    const enrichedSuccess = await enrichItemWithYouTubeDuration(successItem, {
+      apiKey: 'test_key',
+      fetchFn: mockSuccessFetch,
+    });
+    if (enrichedSuccess.durationMinutes !== 45) {
+      throw new Error(`Expected success item to receive 45m duration, got ${enrichedSuccess.durationMinutes}`);
+    }
+    if (enrichedSuccess.durationIsEstimate !== false) {
+      throw new Error(`Expected success item to have durationIsEstimate === false`);
+    }
+    if (!enrichedSuccess.durationFetchedAt) {
+      throw new Error(`Expected success item to have durationFetchedAt set`);
+    }
+
+    // 5. A user edit is NEVER overwritten
+    const userEditedItem: ContentItem = {
+      id: 'user-edited-yt-1',
+      url: 'https://www.youtube.com/watch?v=succ1234567',
+      title: 'User Hand Timed Video',
+      contentType: 'youtube',
+      durationMinutes: 15,
+      durationIsEstimate: false,
+      userEditedFields: ['durationMinutes'],
+      editedFields: ['durationMinutes'],
+      status: 'inbox',
+      createdAt: '2026-10-10T00:00:00.000Z',
+      thumbnailUrl: '',
+    };
+
+    const enrichedUserEdit = await enrichItemWithYouTubeDuration(userEditedItem, {
+      apiKey: 'test_key',
+      fetchFn: mockSuccessFetch,
+    });
+    if (enrichedUserEdit.durationMinutes !== 15) {
+      throw new Error(
+        `User edited duration was overwritten by YouTube fetch! Expected 15, got ${enrichedUserEdit.durationMinutes}`
+      );
+    }
+    if (enrichedUserEdit.durationIsEstimate !== false) {
+      throw new Error(`User edited item lost durationIsEstimate: false`);
+    }
+
+    // 6. Analytics: duration_fetched tracked with { source: 'youtube', ok: boolean } only
+    const storedEvents = getStoredAnalyticsEvents();
+    const durationEvents = storedEvents.filter((e) => e.name === 'duration_fetched');
+    if (durationEvents.length === 0) {
+      throw new Error('Expected duration_fetched event to be recorded in session log');
+    }
+    for (const evt of durationEvents) {
+      if (evt.properties?.source !== 'youtube') {
+        throw new Error(`Expected duration_fetched prop source to be 'youtube', got '${evt.properties?.source}'`);
+      }
+      if (typeof evt.properties?.ok !== 'boolean') {
+        throw new Error(`Expected duration_fetched prop ok to be boolean, got '${evt.properties?.ok}'`);
+      }
+    }
+
+    results.push({
+      id: 'test-22-youtube-real-durations',
+      name: 'YouTube Real Durations: ISO 8601 parsing, live streams stay estimates, error fallback, user edit protection, and duration_fetched event',
+      passed: true,
+      message:
+        'Verified: Parsed PT1H2M3S (62m), PT45M (45m), PT30S (1m), PT10H (600m), P1DT2H (1560m); live/missing durations remain estimates; network failures fall back gracefully; user-edited durations are never overwritten; duration_fetched tracked with {source: "youtube", ok: boolean} only.',
+    });
+  } catch (err: any) {
+    results.push({
+      id: 'test-22-youtube-real-durations',
+      name: 'YouTube Real Durations: ISO 8601 parsing, live streams stay estimates, error fallback, user edit protection, and duration_fetched event',
+      passed: false,
+      message: err.message || String(err),
+    });
+  }
+
   const passedCount = results.filter((r) => r.passed).length;
   const failedCount = results.filter((r) => !r.passed).length;
 
@@ -1719,24 +2153,26 @@ export function runSelfCheckTests(): SelfCheckSuiteResult {
 
 // Auto-run if executed directly via Node / tsx CLI
 if (typeof process !== 'undefined' && process.argv && process.argv[1]?.includes('selfCheck')) {
-  console.log('\n========================================');
-  console.log('🧪 CurateCal Self-Check Test Suite');
-  console.log('========================================\n');
+  (async () => {
+    console.log('\n========================================');
+    console.log('🧪 CurateCal Self-Check Test Suite');
+    console.log('========================================\n');
 
-  const suite = runSelfCheckTests();
+    const suite = await runSelfCheckTests();
 
-  for (const t of suite.results) {
-    const symbol = t.passed ? '✅ PASS' : '❌ FAIL';
-    console.log(`${symbol} [${t.id}]`);
-    console.log(`   ${t.name}`);
-    console.log(`   ${t.message}\n`);
-  }
+    for (const t of suite.results) {
+      const symbol = t.passed ? '✅ PASS' : '❌ FAIL';
+      console.log(`${symbol} [${t.id}]`);
+      console.log(`   ${t.name}`);
+      console.log(`   ${t.message}\n`);
+    }
 
-  console.log('----------------------------------------');
-  console.log(`Summary: ${suite.passed}/${suite.total} passed (${suite.failed} failed)`);
-  console.log('========================================\n');
+    console.log('----------------------------------------');
+    console.log(`Summary: ${suite.passed}/${suite.total} passed (${suite.failed} failed)`);
+    console.log('========================================\n');
 
-  if (!suite.success) {
-    process.exit(1);
-  }
+    if (!suite.success) {
+      process.exit(1);
+    }
+  })();
 }

@@ -38,6 +38,7 @@ interface HomePageProps {
   onLoadStarterPack: () => void;
   onOpenAddModal: (type?: ContentType) => void;
   onPlanMyWeek?: () => void;
+  onUpdateDuration?: (id: string, durationMinutes: number) => void;
 }
 
 interface CategoryDefinition {
@@ -171,6 +172,7 @@ export const HomePage: React.FC<HomePageProps> = ({
   onOpenAddModal,
   onNavigateToCalendar,
   onPlanMyWeek,
+  onUpdateDuration,
 }) => {
   // Activation milestone state
   const [activation, setActivation] = useState<ActivationState>(getActivationState());
@@ -220,6 +222,8 @@ export const HomePage: React.FC<HomePageProps> = ({
     platform: string;
     author: string;
     durationMinutes?: number;
+    durationIsEstimate?: boolean;
+    durationFetchedAt?: string;
     topic?: string;
   } | null>(null);
 
@@ -492,6 +496,8 @@ export const HomePage: React.FC<HomePageProps> = ({
           platform: meta.platform,
           author: meta.author,
           durationMinutes: meta.durationMinutes,
+          durationIsEstimate: meta.durationIsEstimate,
+          durationFetchedAt: meta.durationFetchedAt,
           topic: meta.topic,
         });
       } catch (err) {
@@ -511,6 +517,7 @@ export const HomePage: React.FC<HomePageProps> = ({
     const thumbnailUrl = previewItem?.thumbnailUrl || '';
     const contentType = previewItem?.contentType || 'other';
     const source = previewItem?.author || previewItem?.platform || 'Curate';
+    const isEstimate = previewItem?.durationIsEstimate !== false;
 
     onAddItem({
       url: pasteUrl.trim() || undefined,
@@ -521,6 +528,10 @@ export const HomePage: React.FC<HomePageProps> = ({
       platform: previewItem?.platform,
       author: previewItem?.author,
       durationMinutes: previewItem?.durationMinutes,
+      durationIsEstimate: isEstimate,
+      durationFetchedAt: previewItem?.durationFetchedAt,
+      userEditedFields: isEstimate ? [] : ['durationMinutes'],
+      editedFields: isEstimate ? [] : ['durationMinutes'],
       topic: previewItem?.topic,
       status,
       scheduledDate:
@@ -957,6 +968,7 @@ export const HomePage: React.FC<HomePageProps> = ({
                     onSelect={onSelectCard}
                     onToggleComplete={onToggleComplete}
                     onTogglePriority={onTogglePriority}
+                    onUpdateDuration={onUpdateDuration}
                     variant="visual"
                     disableDrag={true}
                   />
@@ -1068,6 +1080,7 @@ export const HomePage: React.FC<HomePageProps> = ({
                             onSelect={onSelectCard}
                             onToggleComplete={onToggleComplete}
                             onTogglePriority={onTogglePriority}
+                            onUpdateDuration={onUpdateDuration}
                             variant="visual"
                             disableDrag={true}
                           />
@@ -1132,6 +1145,7 @@ export const HomePage: React.FC<HomePageProps> = ({
                         onSelect={onSelectCard}
                         onToggleComplete={onToggleComplete}
                         onTogglePriority={onTogglePriority}
+                        onUpdateDuration={onUpdateDuration}
                         variant="visual"
                         disableDrag={true}
                       />

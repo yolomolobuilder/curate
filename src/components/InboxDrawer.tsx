@@ -41,9 +41,10 @@ interface InboxDrawerProps {
   onOpenAddModal: () => void;
   onMoveToInbox: (itemId: string) => void;
   onLoadStarterPack?: () => void;
-  hasItems: boolean;
+  hasItems?: boolean;
   isDocked?: boolean;
   onOpenQuickPlan?: (presetMinutes?: number) => void;
+  onUpdateDuration?: (id: string, durationMinutes: number) => void;
 }
 
 export const InboxDrawer: React.FC<InboxDrawerProps> = ({
@@ -54,6 +55,7 @@ export const InboxDrawer: React.FC<InboxDrawerProps> = ({
   onSelectCard,
   onToggleComplete,
   onTogglePriority,
+  onUpdateDuration,
   onScheduleDate,
   onOpenAddModal,
   onMoveToInbox,
@@ -538,6 +540,7 @@ export const InboxDrawer: React.FC<InboxDrawerProps> = ({
                 onSelect={onSelectCard}
                 onToggleComplete={onToggleComplete}
                 onTogglePriority={onTogglePriority}
+                onUpdateDuration={onUpdateDuration}
               />
 
               {/* Quiet Quick Schedule & Action bar */}

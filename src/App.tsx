@@ -33,6 +33,10 @@ import {
   recordActivationCalendarViewed,
   recordActivationPlanMyWeek,
 } from './lib/activation';
+import {
+  enrichItemWithYouTubeDuration,
+  isDurationUserEdited,
+} from './lib/youtubeDuration';
 import { RotateCcw, X, AlertCircle, Download } from 'lucide-react';
 import { calculateTimeForMonth, calculateTimeForDate } from './lib/timeAccounting';
 import { toDateStr, getOffsetDateStr, getTodayStr, getWeekDates } from './lib/dateUtils';
@@ -228,6 +232,23 @@ export default function App() {
         recordActivationScheduled(newItem.id, newItem.scheduledDate, undefined, false);
       }
     }
+
+    // Enrich YouTube link with real duration if available (never blocks saving)
+    if (newItem.url && !isDurationUserEdited(newItem)) {
+      enrichItemWithYouTubeDuration(newItem)
+        .then((enriched) => {
+          if (enriched.durationMinutes && enriched.durationIsEstimate === false) {
+            setItems((prev) => {
+              const next = prev.map((it) => (it.id === newItem.id ? enriched : it));
+              saveStoredItems(next);
+              return next;
+            });
+          }
+        })
+        .catch(() => {
+          // Keep estimate on any failure
+        });
+    }
   };
 
   // Add Item to a specific date from drag
@@ -258,6 +279,23 @@ export default function App() {
       recordActivationSave(activeCount, undefined, newItem.contentType, false);
       recordActivationScheduled(newItem.id, targetDateStr, undefined, false);
     }
+
+    // Enrich YouTube link with real duration if available (never blocks saving)
+    if (newItem.url && !isDurationUserEdited(newItem)) {
+      enrichItemWithYouTubeDuration(newItem)
+        .then((enriched) => {
+          if (enriched.durationMinutes && enriched.durationIsEstimate === false) {
+            setItems((prev) => {
+              const next = prev.map((it) => (it.id === newItem.id ? enriched : it));
+              saveStoredItems(next);
+              return next;
+            });
+          }
+        })
+        .catch(() => {
+          // Keep estimate on any failure
+        });
+    }
   };
 
   // Update Item
@@ -267,8 +305,42 @@ export default function App() {
     method?: 'drag' | 'quick_move' | 'quick_plan' | 'modal'
   ) => {
     const target = items.find((it) => it.id === id);
-    const updated = items.map((it) => (it.id === id ? { ...it, ...updates } : it));
+    const isDurationChanged =
+      updates.durationMinutes !== undefined &&
+      updates.durationMinutes !== target?.durationMinutes;
+
+    const mergedUpdates: Partial<ContentItem> = {
+      ...updates,
+      ...(isDurationChanged
+        ? {
+            durationIsEstimate: false,
+            userEditedFields: Array.from(
+              new Set([
+                ...(target?.userEditedFields || []),
+                ...(target?.editedFields || []),
+                'durationMinutes',
+              ])
+            ),
+            editedFields: Array.from(
+              new Set([
+                ...(target?.userEditedFields || []),
+                ...(target?.editedFields || []),
+                'durationMinutes',
+              ])
+            ),
+          }
+        : {}),
+    };
+
+    const updated = items.map((it) => (it.id === id ? { ...it, ...mergedUpdates } : it));
     handleSaveItems(updated);
+
+    if (isDurationChanged && target) {
+      trackEvent('duration_edited', {
+        type: target.contentType,
+        wasEstimate: target.durationIsEstimate !== false,
+      });
+    }
 
     if (updates.scheduledDate && updates.scheduledDate !== target?.scheduledDate) {
       trackEvent('item_planned', {
@@ -284,8 +356,54 @@ export default function App() {
       recordActivationScheduled(id, updates.scheduledDate, undefined, false);
     }
     if (selectedItem && selectedItem.id === id) {
-      setSelectedItem((prev) => (prev ? { ...prev, ...updates } : null));
+      setSelectedItem((prev) => (prev ? { ...prev, ...mergedUpdates } : null));
     }
+  };
+
+  // Dedicated one-tap duration updater
+  const handleUpdateDuration = (id: string, durationMinutes: number) => {
+    const target = items.find((it) => it.id === id);
+    if (!target) return;
+    const wasEstimate = target.durationIsEstimate !== false;
+
+    const currentEdited = new Set([
+      ...(target.userEditedFields || []),
+      ...(target.editedFields || []),
+      'durationMinutes',
+    ]);
+    const fields = Array.from(currentEdited);
+
+    const updated = items.map((it) =>
+      it.id === id
+        ? {
+            ...it,
+            durationMinutes,
+            durationIsEstimate: false,
+            userEditedFields: fields,
+            editedFields: fields,
+          }
+        : it
+    );
+    handleSaveItems(updated);
+
+    if (selectedItem && selectedItem.id === id) {
+      setSelectedItem((prev) =>
+        prev
+          ? {
+              ...prev,
+              durationMinutes,
+              durationIsEstimate: false,
+              userEditedFields: fields,
+              editedFields: fields,
+            }
+          : null
+      );
+    }
+
+    trackEvent('duration_edited', {
+      type: target.contentType,
+      wasEstimate,
+    });
   };
 
   // Delete Item
@@ -574,6 +692,7 @@ export default function App() {
                 onApplyQuickPlan={handleApplyQuickPlan}
                 onOpenQuickPlan={handleOpenQuickPlan}
                 onOpenWeeklyReview={() => setIsWeeklyReviewOpen(true)}
+                onUpdateDuration={handleUpdateDuration}
               />
             </div>
           )}
@@ -598,6 +717,7 @@ export default function App() {
             onLoadStarterPack={handleLoadStarterPack}
             hasItems={items.length > 0}
             onOpenQuickPlan={handleOpenQuickPlan}
+            onUpdateDuration={handleUpdateDuration}
           />
         )}
       </div>
@@ -621,6 +741,7 @@ export default function App() {
         onClose={() => setSelectedItem(null)}
         onUpdate={handleUpdateItem}
         onDelete={handleDeleteItem}
+        onUpdateDuration={handleUpdateDuration}
       />
 
       {/* Search Modal */}
@@ -641,6 +762,7 @@ export default function App() {
         onToggleComplete={handleToggleComplete}
         onTogglePriority={handleTogglePriority}
         onAddForDate={handleAddForDate}
+        onUpdateDuration={handleUpdateDuration}
       />
 
       {/* Settings & Storage Backup Modal */}
@@ -752,6 +874,7 @@ export default function App() {
           setActiveTab('calendar');
           setView('week');
         }}
+        onUpdateDuration={handleUpdateDuration}
       />
 
       {/* Weekly Review Modal (Start-of-week factual totals & triage) */}

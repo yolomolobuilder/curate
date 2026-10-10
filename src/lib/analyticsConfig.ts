@@ -1,6 +1,6 @@
 export const UMAMI_SCRIPT_URL = 'https://cloud.umami.is/script.js';
 export const UMAMI_WEBSITE_ID = 'b008d06f-e3cf-4a06-93b3-7afaf29b77a9';
-export const UMAMI_DOMAINS = ['<https://curatecalendartest.ai.studio/>'];
+export const UMAMI_DOMAINS = ['curatecalendartest.ai.studio'];
 
 export const ANALYTICS_OFF_STORAGE_KEY = 'curate.analytics.off';
 

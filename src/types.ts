@@ -25,6 +25,10 @@ export interface ContentItem {
   platform?: string;
   author?: string;
   durationMinutes?: number;
+  durationIsEstimate?: boolean; // True if auto-filled/estimated heuristic, false if user-edited
+  durationFetchedAt?: string; // ISO 8601 timestamp when real duration was fetched from YouTube API
+  userEditedFields?: string[]; // Fields explicitly edited by user: ['title', 'contentType', 'source', 'durationMinutes']
+  editedFields?: string[]; // Alias for userEditedFields
   topic?: string;
   status: ContentStatus;
   scheduledDate?: string; // YYYY-MM-DD

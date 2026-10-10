@@ -16,10 +16,14 @@ import {
   Sparkles,
   Timer,
   Star,
+  Edit3,
+  RefreshCw,
 } from 'lucide-react';
-import { ContentItem, ContentStatus, CONTENT_TYPE_CONFIG } from '../types';
-import { extractYouTubeId } from '../lib/metadataExtractor';
+import { ContentItem, ContentStatus, ContentType, CONTENT_TYPE_CONFIG } from '../types';
+import { extractYouTubeId, refetchItemMetadata } from '../lib/metadataExtractor';
 import { formatDuration } from '../lib/timeAccounting';
+import { trackEvent } from '../lib/analytics';
+import { DurationChips, DurationBadgeWithPicker } from './DurationEditor';
 import {
   saveMediaItem,
   getMediaItemSync,
@@ -32,6 +36,7 @@ interface ContentDetailModalProps {
   onClose: () => void;
   onUpdate: (id: string, updates: Partial<ContentItem>) => void;
   onDelete: (id: string) => void;
+  onUpdateDuration?: (id: string, durationMinutes: number) => void;
 }
 
 export const ContentDetailModal: React.FC<ContentDetailModalProps> = ({
@@ -40,6 +45,7 @@ export const ContentDetailModal: React.FC<ContentDetailModalProps> = ({
   onClose,
   onUpdate,
   onDelete,
+  onUpdateDuration,
 }) => {
   const [notes, setNotes] = useState('');
   const [keyTakeaway, setKeyTakeaway] = useState('');
@@ -50,6 +56,13 @@ export const ContentDetailModal: React.FC<ContentDetailModalProps> = ({
   const [zoomScreenshot, setZoomScreenshot] = useState<string | null>(null);
   const [imageError, setImageError] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Edit details panel states
+  const [editTitle, setEditTitle] = useState('');
+  const [editType, setEditType] = useState<ContentType>('article');
+  const [editSource, setEditSource] = useState('');
+  const [refetchMessage, setRefetchMessage] = useState<string | null>(null);
+  const [isRefetching, setIsRefetching] = useState(false);
 
   const ytId = item?.url ? extractYouTubeId(item.url) : null;
   const isYouTube = !!ytId;
@@ -67,6 +80,10 @@ export const ContentDetailModal: React.FC<ContentDetailModalProps> = ({
       setStatus(item.status);
       setScreenshots(item.screenshots || []);
       setImageError(false);
+      setEditTitle(item.title || '');
+      setEditType(item.contentType || 'article');
+      setEditSource(item.source || item.author || item.platform || '');
+      setRefetchMessage(null);
       // Default to video embed if YouTube, else cover
       setActiveMediaView(ytId || spotifyEmbedUrl ? 'video' : 'cover');
     }
@@ -110,8 +127,102 @@ export const ContentDetailModal: React.FC<ContentDetailModalProps> = ({
 
   if (!isOpen || !item) return null;
 
-  const typeConfig = CONTENT_TYPE_CONFIG[item.contentType] || CONTENT_TYPE_CONFIG.other;
+  const handleDurationEdit = (minutes: number) => {
+    if (!item) return;
+    const wasEstimate = item.durationIsEstimate !== false;
+    const currentEdited = new Set([
+      ...(item.userEditedFields || []),
+      ...(item.editedFields || []),
+      'durationMinutes',
+    ]);
+    const fields = Array.from(currentEdited);
 
+    onUpdate(item.id, {
+      durationMinutes: minutes,
+      durationIsEstimate: false,
+      userEditedFields: fields,
+      editedFields: fields,
+    });
+
+    onUpdateDuration?.(item.id, minutes);
+
+    trackEvent('duration_edited', {
+      type: item.contentType,
+      wasEstimate,
+    });
+  };
+
+  const handleTitleChange = (newTitle: string) => {
+    setEditTitle(newTitle);
+    if (!item) return;
+    const currentEdited = new Set([
+      ...(item.userEditedFields || []),
+      ...(item.editedFields || []),
+      'title',
+    ]);
+    const fields = Array.from(currentEdited);
+    onUpdate(item.id, {
+      title: newTitle,
+      userEditedFields: fields,
+      editedFields: fields,
+    });
+  };
+
+  const handleTypeChange = (newType: ContentType) => {
+    setEditType(newType);
+    if (!item) return;
+    const currentEdited = new Set([
+      ...(item.userEditedFields || []),
+      ...(item.editedFields || []),
+      'contentType',
+    ]);
+    const fields = Array.from(currentEdited);
+    onUpdate(item.id, {
+      contentType: newType,
+      userEditedFields: fields,
+      editedFields: fields,
+    });
+  };
+
+  const handleSourceChange = (newSource: string) => {
+    setEditSource(newSource);
+    if (!item) return;
+    const currentEdited = new Set([
+      ...(item.userEditedFields || []),
+      ...(item.editedFields || []),
+      'source',
+    ]);
+    const fields = Array.from(currentEdited);
+    onUpdate(item.id, {
+      source: newSource,
+      platform: newSource,
+      author: newSource,
+      userEditedFields: fields,
+      editedFields: fields,
+    });
+  };
+
+  const handleRefetch = async () => {
+    if (!item || !item.url) return;
+    setIsRefetching(true);
+    setRefetchMessage(null);
+    try {
+      const updated = await refetchItemMetadata(item);
+      onUpdate(item.id, updated);
+      setEditTitle(updated.title);
+      setEditType(updated.contentType);
+      setEditSource(updated.source || updated.author || updated.platform || '');
+      setRefetchMessage('Metadata refetched from URL. Your custom edits were preserved.');
+      setTimeout(() => setRefetchMessage(null), 4000);
+    } catch {
+      setRefetchMessage('Could not refetch metadata from URL.');
+      setTimeout(() => setRefetchMessage(null), 4000);
+    } finally {
+      setIsRefetching(false);
+    }
+  };
+
+  const typeConfig = CONTENT_TYPE_CONFIG[item.contentType] || CONTENT_TYPE_CONFIG.other;
 
   const handleSaveFields = () => {
     onUpdate(item.id, {
@@ -301,12 +412,15 @@ export const ContentDetailModal: React.FC<ContentDetailModalProps> = ({
                 )}
               </div>
 
-              {item.durationMinutes && (
-                <div className="flex items-center gap-1 text-xs font-mono text-stone-500">
-                  <Clock className="w-3.5 h-3.5" />
-                  <span>Duration: {formatDuration(item.durationMinutes)}</span>
-                </div>
-              )}
+              <div className="flex items-center gap-1.5 text-xs font-mono text-stone-500">
+                <Clock className="w-3.5 h-3.5 text-stone-400" />
+                <span>Duration:</span>
+                <DurationBadgeWithPicker
+                  item={item}
+                  onUpdateDuration={(_, mins) => handleDurationEdit(mins)}
+                  className="font-semibold text-stone-700 dark:text-stone-300"
+                />
+              </div>
             </div>
 
             {/* Embedded Video Player or Thumbnail Frame */}
@@ -382,6 +496,110 @@ export const ContentDetailModal: React.FC<ContentDetailModalProps> = ({
                   </span>
                 </>
               )}
+            </div>
+          </div>
+
+          {/* EDIT DETAILS PANEL (Requirement 3: title, type, source, duration; edited fields never overwritten by metadata refetches) */}
+          <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-stone-100 dark:border-stone-850">
+              <div className="flex items-center gap-2">
+                <Edit3 className="w-4 h-4 text-stone-500" />
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-stone-800 dark:text-stone-200">
+                  Edit Details
+                </h3>
+                {item.durationIsEstimate !== false ? (
+                  <span className="text-[10px] font-mono text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 px-2 py-0.5 rounded-md border border-amber-200 dark:border-amber-800">
+                    est. duration
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-mono text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800">
+                    user edited
+                  </span>
+                )}
+              </div>
+
+              {item.url && (
+                <button
+                  type="button"
+                  onClick={handleRefetch}
+                  disabled={isRefetching}
+                  className="flex items-center gap-1.5 text-[11px] font-sans text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-stone-100 px-2.5 py-1 rounded-lg border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-850 transition-colors cursor-pointer disabled:opacity-50"
+                  title="Refetch metadata from URL (keeps your custom edits)"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isRefetching ? 'animate-spin' : ''}`} />
+                  <span>Refetch metadata</span>
+                </button>
+              )}
+            </div>
+
+            {refetchMessage && (
+              <div className="text-xs font-sans px-3 py-1.5 rounded-lg bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-300">
+                {refetchMessage}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+              {/* Title input */}
+              <div className="sm:col-span-2">
+                <label className="block text-[11px] font-mono text-stone-500 uppercase tracking-wider mb-1">
+                  Title
+                </label>
+                <input
+                  type="text"
+                  value={editTitle}
+                  onChange={(e) => handleTitleChange(e.target.value)}
+                  placeholder="Content title..."
+                  className="w-full px-3 py-2 text-sm rounded-xl bg-stone-50 dark:bg-stone-950 border border-stone-200 dark:border-stone-800 text-stone-900 dark:text-stone-100 focus:outline-hidden focus:ring-1 focus:ring-stone-400 font-serif"
+                />
+              </div>
+
+              {/* Type selector */}
+              <div>
+                <label className="block text-[11px] font-mono text-stone-500 uppercase tracking-wider mb-1">
+                  Type
+                </label>
+                <select
+                  value={editType}
+                  onChange={(e) => handleTypeChange(e.target.value as ContentType)}
+                  className="w-full px-3 py-2 text-xs rounded-xl bg-stone-50 dark:bg-stone-950 border border-stone-200 dark:border-stone-800 text-stone-900 dark:text-stone-100 focus:outline-hidden focus:ring-1 focus:ring-stone-400 font-sans cursor-pointer capitalize"
+                >
+                  {(['youtube', 'podcast', 'article', 'book', 'course', 'documentary', 'other'] as ContentType[]).map((t) => (
+                    <option key={t} value={t}>
+                      {CONTENT_TYPE_CONFIG[t]?.label || t}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Source input */}
+              <div>
+                <label className="block text-[11px] font-mono text-stone-500 uppercase tracking-wider mb-1">
+                  Source / Creator
+                </label>
+                <input
+                  type="text"
+                  value={editSource}
+                  onChange={(e) => handleSourceChange(e.target.value)}
+                  placeholder="e.g. YouTube, Harvard Business Review..."
+                  className="w-full px-3 py-2 text-xs rounded-xl bg-stone-50 dark:bg-stone-950 border border-stone-200 dark:border-stone-800 text-stone-900 dark:text-stone-100 focus:outline-hidden focus:ring-1 focus:ring-stone-400 font-sans"
+                />
+              </div>
+
+              {/* Duration with 1-tap chips & custom field */}
+              <div className="sm:col-span-2 pt-1 border-t border-stone-100 dark:border-stone-850">
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-[11px] font-mono text-stone-500 uppercase tracking-wider">
+                    Duration ({formatDuration(item.durationMinutes) || 'Not set'}{item.durationIsEstimate !== false ? ' est.' : ''})
+                  </label>
+                  <span className="text-[10px] font-sans text-stone-400">
+                    One-tap editing sets duration & recalculates totals
+                  </span>
+                </div>
+                <DurationChips
+                  currentMinutes={item.durationMinutes}
+                  onSelectDuration={handleDurationEdit}
+                />
+              </div>
             </div>
           </div>
 

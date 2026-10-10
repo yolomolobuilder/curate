@@ -18,6 +18,7 @@ interface DayDrawerProps {
   onToggleComplete: (id: string, e: React.MouseEvent) => void;
   onTogglePriority?: (id: string, e: React.MouseEvent) => void;
   onAddForDate: (dateStr: string) => void;
+  onUpdateDuration?: (id: string, durationMinutes: number) => void;
 }
 
 export const DayDrawer: React.FC<DayDrawerProps> = ({
@@ -29,6 +30,7 @@ export const DayDrawer: React.FC<DayDrawerProps> = ({
   onToggleComplete,
   onTogglePriority,
   onAddForDate,
+  onUpdateDuration,
 }) => {
   if (!isOpen || !dateStr) return null;
 
@@ -107,6 +109,7 @@ export const DayDrawer: React.FC<DayDrawerProps> = ({
                 onSelect={onSelectCard}
                 onToggleComplete={onToggleComplete}
                 onTogglePriority={onTogglePriority}
+                onUpdateDuration={onUpdateDuration}
               />
             );
           })

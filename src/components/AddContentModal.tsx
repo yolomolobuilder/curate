@@ -3,6 +3,7 @@ import { X, Sparkles, Link as LinkIcon, Calendar, Inbox, ChevronDown, Play, File
 import { ContentType, ContentItem, CONTENT_TYPE_CONFIG } from '../types';
 import { extractMetadata, EDITORIAL_COVER_PALETTES, generateEditorialCoverSvg } from '../lib/metadataExtractor';
 import { getTodayStr } from '../lib/dateUtils';
+import { DurationChips } from './DurationEditor';
 
 interface AddContentModalProps {
   isOpen: boolean;
@@ -35,6 +36,8 @@ export const AddContentModal: React.FC<AddContentModalProps> = ({
   const [platform, setPlatform] = useState('');
   const [author, setAuthor] = useState('');
   const [durationMinutes, setDurationMinutes] = useState<number>(30);
+  const [durationIsEstimate, setDurationIsEstimate] = useState<boolean>(true);
+  const [durationFetchedAt, setDurationFetchedAt] = useState<string | undefined>(undefined);
   const [topic, setTopic] = useState('Marketing');
   const [scheduledDate, setScheduledDate] = useState<string>(initialDate || '');
   const [isInbox, setIsInbox] = useState(!initialDate);
@@ -69,7 +72,11 @@ export const AddContentModal: React.FC<AddContentModalProps> = ({
         setContentType(meta.contentType);
         setPlatform(meta.platform);
         setAuthor(meta.author);
-        if (meta.durationMinutes) setDurationMinutes(meta.durationMinutes);
+        if (meta.durationMinutes) {
+          setDurationMinutes(meta.durationMinutes);
+          setDurationIsEstimate(meta.durationIsEstimate !== false);
+          setDurationFetchedAt(meta.durationFetchedAt);
+        }
         if (meta.topic) setTopic(meta.topic);
       } catch (err) {
         console.warn('Auto metadata extraction failed:', err);
@@ -98,6 +105,10 @@ export const AddContentModal: React.FC<AddContentModalProps> = ({
       platform: platform.trim() || undefined,
       author: author.trim() || undefined,
       durationMinutes: durationMinutes > 0 ? durationMinutes : undefined,
+      durationIsEstimate: durationIsEstimate,
+      durationFetchedAt: durationFetchedAt,
+      userEditedFields: durationIsEstimate ? [] : ['durationMinutes'],
+      editedFields: durationIsEstimate ? [] : ['durationMinutes'],
       topic: topic || undefined,
       status: isInbox ? 'inbox' : 'planned',
       scheduledDate: isInbox ? undefined : (scheduledDate || undefined),
@@ -107,6 +118,7 @@ export const AddContentModal: React.FC<AddContentModalProps> = ({
     setUrlInput('');
     setTitle('');
     setThumbnailUrl('');
+    setDurationIsEstimate(true);
     onClose();
   };
 
@@ -294,13 +306,19 @@ export const AddContentModal: React.FC<AddContentModalProps> = ({
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-[11px] text-stone-400 mb-1">Duration (minutes)</label>
-                  <input
-                    type="number"
-                    value={durationMinutes}
-                    onChange={(e) => setDurationMinutes(Number(e.target.value))}
-                    className="w-24 px-2.5 py-1.5 rounded-xl bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 text-xs font-mono"
+                <div className="space-y-1.5 pt-1">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-[11px] text-stone-400">Duration (chips & custom)</label>
+                    <span className="text-[10px] font-mono text-stone-500">
+                      {durationMinutes}m {durationIsEstimate ? '(est.)' : '(custom)'}
+                    </span>
+                  </div>
+                  <DurationChips
+                    currentMinutes={durationMinutes}
+                    onSelectDuration={(mins) => {
+                      setDurationMinutes(mins);
+                      setDurationIsEstimate(false);
+                    }}
                   />
                 </div>
               </div>
