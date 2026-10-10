@@ -1,4 +1,5 @@
 import { ContentType } from '../types';
+import { trackEvent } from './analytics';
 
 export interface ExtractedMetadata {
   title: string;
@@ -143,6 +144,7 @@ export async function extractMetadata(urlInput: string): Promise<ExtractedMetada
 
   if (!isUrl) {
     // Treat as manual book or lecture title
+    trackEvent('metadata_fallback_used', { type: 'book' });
     const topic = detectTopic(trimmed);
     const cover = generateEditorialCoverSvg(trimmed, 'Author', topic, 0);
     return {
@@ -161,6 +163,7 @@ export async function extractMetadata(urlInput: string): Promise<ExtractedMetada
   try {
     parsedUrl = new URL(trimmed);
   } catch {
+    trackEvent('metadata_fallback_used', { type: 'other' });
     const topic = detectTopic(trimmed);
     return {
       title: trimmed,
@@ -194,9 +197,12 @@ export async function extractMetadata(urlInput: string): Promise<ExtractedMetada
         const data = await res.json();
         if (data.title) title = data.title;
         if (data.author_name) author = data.author_name;
+      } else {
+        trackEvent('metadata_fallback_used', { type: contentType });
       }
     } catch {
       // Offline or CORS fallback
+      trackEvent('metadata_fallback_used', { type: contentType });
       title = `YouTube: ${ytId}`;
     }
 

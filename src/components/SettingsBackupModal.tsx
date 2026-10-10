@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import {
   X,
   Download,
@@ -11,15 +11,39 @@ import {
   ChevronRight,
   AlertCircle,
   FileCheck,
+  HardDrive,
+  AlertTriangle,
+  Image as ImageIcon,
+  Copy,
 } from 'lucide-react';
+import {
+  getCustomBrandLogo,
+  saveCustomBrandLogo,
+} from '../lib/brand';
+import { CurateLogo } from './CurateLogo';
 import {
   exportBackupJson,
   importBackupJson,
   validateBackupData,
   BackupValidationSummary,
+  getStoredDayPreferencesEnabled,
+  saveStoredDayPreferencesEnabled,
+  getStorageUsageStats,
+  getStorageFailureInfo,
+  StorageUsageStats,
+  StorageFailureInfo,
 } from '../lib/storage';
 import { getTodayStr } from '../lib/dateUtils';
 import { runSelfCheckTests, SelfCheckSuiteResult } from '../lib/selfCheck';
+import {
+  getStoredAnalyticsEvents,
+  clearAnalyticsEvents,
+  copySessionLogToClipboard,
+} from '../lib/analytics';
+import {
+  isAnalyticsDisabled,
+  setAnalyticsDisabled,
+} from '../lib/analyticsConfig';
 
 interface SettingsBackupModalProps {
   isOpen: boolean;
@@ -42,12 +66,80 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
   const [importSuccess, setImportSuccess] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [selfCheckResult, setSelfCheckResult] = useState<SelfCheckSuiteResult | null>(null);
+  const [storageStats, setStorageStats] = useState<StorageUsageStats>(() => getStorageUsageStats());
+  const [storageFailure, setStorageFailure] = useState<StorageFailureInfo | null>(() =>
+    getStorageFailureInfo()
+  );
+  const [dayPreferencesEnabled, setDayPreferencesEnabled] = useState(() =>
+    getStoredDayPreferencesEnabled()
+  );
+  const [currentLogo, setCurrentLogo] = useState<string | null>(() => getCustomBrandLogo());
+  const logoInputRef = useRef<HTMLInputElement>(null);
   const [pendingImport, setPendingImport] = useState<{
     summary: BackupValidationSummary;
     rawContent: string;
   } | null>(null);
 
+  const [analyticsOff, setAnalyticsOff] = useState(() => isAnalyticsDisabled());
+  const [copiedLog, setCopiedLog] = useState(false);
+  const [logCount, setLogCount] = useState(() => getStoredAnalyticsEvents().length);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setStorageStats(getStorageUsageStats());
+    setStorageFailure(getStorageFailureInfo());
+    setAnalyticsOff(isAnalyticsDisabled());
+    setLogCount(getStoredAnalyticsEvents().length);
+
+    const refreshStorageInfo = () => {
+      setStorageStats(getStorageUsageStats());
+      setStorageFailure(getStorageFailureInfo());
+    };
+
+    const refreshAnalyticsInfo = () => {
+      setLogCount(getStoredAnalyticsEvents().length);
+    };
+
+    window.addEventListener('curatecal:items_updated', refreshStorageInfo);
+    window.addEventListener('curatecal:storage_error', refreshStorageInfo);
+    window.addEventListener('curatecal:storage_recovered', refreshStorageInfo);
+    window.addEventListener('curate:analytics', refreshAnalyticsInfo);
+    window.addEventListener('curate:analytics_cleared', refreshAnalyticsInfo);
+    return () => {
+      window.removeEventListener('curatecal:items_updated', refreshStorageInfo);
+      window.removeEventListener('curatecal:storage_error', refreshStorageInfo);
+      window.removeEventListener('curatecal:storage_recovered', refreshStorageInfo);
+      window.removeEventListener('curate:analytics', refreshAnalyticsInfo);
+      window.removeEventListener('curate:analytics_cleared', refreshAnalyticsInfo);
+    };
+  }, [isOpen]);
+
   if (!isOpen) return null;
+
+  const handleToggleAnalyticsOff = () => {
+    const next = !analyticsOff;
+    setAnalyticsOff(next);
+    setAnalyticsDisabled(next);
+  };
+
+  const handleCopySessionLog = async () => {
+    const ok = await copySessionLogToClipboard();
+    if (ok) {
+      setCopiedLog(true);
+      setTimeout(() => setCopiedLog(false), 2000);
+    }
+  };
+
+  const handleClearSessionLog = () => {
+    clearAnalyticsEvents();
+    setLogCount(0);
+  };
+
+  const handleToggleDayPreferences = () => {
+    const next = !dayPreferencesEnabled;
+    setDayPreferencesEnabled(next);
+    saveStoredDayPreferencesEnabled(next);
+  };
 
   const handleRunSelfCheck = () => {
     const res = runSelfCheckTests();
@@ -63,6 +155,26 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
     a.download = `curatecal-backup-${getTodayStr()}.json`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result as string;
+      if (dataUrl) {
+        saveCustomBrandLogo(dataUrl);
+        setCurrentLogo(dataUrl);
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  const handleResetLogo = () => {
+    saveCustomBrandLogo(null);
+    setCurrentLogo(null);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -131,6 +243,147 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
 
         {/* Content */}
         <div className="p-6 space-y-4 overflow-y-auto flex-1">
+          {/* Storage Save Failure / Safe Mode Alert */}
+          {storageFailure && (
+            <div className="p-4 rounded-xl bg-red-500/10 dark:bg-red-500/15 border border-red-500/30 text-red-950 dark:text-red-200 space-y-2.5">
+              <div className="flex items-start gap-2.5">
+                <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+                <div className="text-xs">
+                  <span className="font-semibold block font-sans">
+                    Saving to browser storage failed
+                  </span>
+                  <p className="mt-0.5 text-stone-600 dark:text-stone-300 leading-relaxed font-sans">
+                    {storageFailure.errorMessage}
+                  </p>
+                  <p className="mt-1 text-stone-600 dark:text-stone-300 text-[11px] leading-relaxed font-sans">
+                    All your changes are safely kept in memory for this session, but will be lost if you refresh or close this tab. Please export a backup immediately to prevent data loss.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleExport}
+                className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg bg-red-600 hover:bg-red-700 text-white font-sans text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Export backup</span>
+              </button>
+            </div>
+          )}
+
+          {/* Browser Storage Used Percentage & 80% Warning */}
+          <div className="p-3.5 rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <HardDrive className="w-4 h-4 text-stone-600 dark:text-stone-400" />
+                <span className="font-sans text-xs font-semibold text-stone-900 dark:text-stone-100">
+                  Browser Storage Used
+                </span>
+              </div>
+              <span
+                className={`text-xs font-mono font-medium ${
+                  storageStats.isWarning
+                    ? 'text-amber-600 dark:text-amber-400 font-bold'
+                    : 'text-stone-700 dark:text-stone-300'
+                }`}
+              >
+                {storageStats.percentage}% ({storageStats.formattedUsed} / {storageStats.formattedQuota})
+              </span>
+            </div>
+
+            {/* Storage Progress Bar */}
+            <div className="w-full bg-stone-100 dark:bg-stone-800 rounded-full h-2 overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all duration-300 ${
+                  storageStats.isWarning
+                    ? 'bg-amber-500 dark:bg-amber-400'
+                    : 'bg-stone-800 dark:bg-stone-200'
+                }`}
+                style={{ width: `${Math.min(100, Math.max(2, storageStats.percentage))}%` }}
+              />
+            </div>
+
+            {/* 80% Warning Banner */}
+            {storageStats.isWarning && (
+              <div className="p-3 rounded-xl bg-amber-500/10 dark:bg-amber-500/15 border border-amber-500/25 flex items-start gap-2.5 text-amber-950 dark:text-amber-200">
+                <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                <div className="text-[11px] flex-1">
+                  <span className="font-semibold block font-sans">
+                    Storage Warning: {storageStats.percentage}% used
+                  </span>
+                  <p className="mt-0.5 text-stone-600 dark:text-stone-300 leading-relaxed font-sans">
+                    Browser storage has exceeded 80% capacity. We recommend downloading an offline backup now to ensure no data is lost if your browser reaches the quota limit.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleExport}
+                    className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-sans font-medium bg-amber-600 hover:bg-amber-700 text-white shadow-xs transition-colors cursor-pointer"
+                  >
+                    <Download className="w-3 h-3" />
+                    <span>Export backup</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {!storageStats.isWarning && (
+              <div className="flex items-center justify-between text-[10px] text-stone-400 dark:text-stone-500 font-mono">
+                <span>Safe Media: Screenshots stored via IndexedDB</span>
+                <span>Max: 5 MB quota</span>
+              </div>
+            )}
+          </div>
+
+          {/* Application Logo & Brand Mark */}
+          <div className="p-3.5 rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="font-sans text-xs font-semibold text-stone-900 dark:text-stone-100 block">
+                  Application Logo
+                </span>
+                <p className="text-[11px] text-stone-500 mt-0.5">
+                  Seamless brand mark rendered directly without black or white background box
+                </p>
+              </div>
+              <div className="w-8 h-8 flex items-center justify-center shrink-0">
+                {currentLogo ? (
+                  <img src={currentLogo} alt="Brand Logo" className="w-full h-full object-contain" />
+                ) : (
+                  <CurateLogo className="w-full h-full text-stone-900 dark:text-stone-100" />
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-2 pt-1 border-t border-stone-100 dark:border-stone-800/80">
+              <button
+                type="button"
+                onClick={() => logoInputRef.current?.click()}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-sans font-medium bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-900 hover:opacity-90 transition-opacity cursor-pointer"
+              >
+                <ImageIcon className="w-3.5 h-3.5" />
+                <span>Upload Logo</span>
+              </button>
+              {currentLogo && (
+                <button
+                  type="button"
+                  onClick={handleResetLogo}
+                  className="px-3 py-1.5 rounded-lg text-xs font-sans font-medium text-stone-500 hover:text-stone-900 dark:hover:text-stone-100 transition-colors cursor-pointer"
+                >
+                  Reset to Default
+                </button>
+              )}
+              <span className="text-[10px] text-stone-400 font-mono ml-auto">
+                Capped at 200 KB
+              </span>
+            </div>
+            <input
+              ref={logoInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleLogoUpload}
+              className="hidden"
+            />
+          </div>
+
           {/* Visible Note: Guest data lives in this browser only */}
           <div className="p-3.5 rounded-xl bg-amber-500/10 dark:bg-amber-500/15 border border-amber-500/25 text-amber-950 dark:text-amber-200">
             <div className="flex items-start gap-2.5">
@@ -228,6 +481,42 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
           )}
 
           <div className="space-y-2.5">
+            {/* Quick Plan Built-in Day Preferences Setting (Rule 6) */}
+            <div className="p-3.5 rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <span className="font-sans text-xs font-semibold text-stone-900 dark:text-stone-100 block">
+                    Quick Plan Built-in Day Preferences
+                  </span>
+                  <p className="text-[11px] text-stone-500 mt-0.5">
+                    Articles Mon/Tue · Podcasts Wed/Thu · Videos & Books Fri/Sat/Sun
+                  </p>
+                </div>
+                {/* Off/On Switch */}
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={dayPreferencesEnabled}
+                  onClick={handleToggleDayPreferences}
+                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden ${
+                    dayPreferencesEnabled ? 'bg-black dark:bg-white' : 'bg-stone-200 dark:bg-stone-700'
+                  }`}
+                  title={dayPreferencesEnabled ? 'Day preferences enabled' : 'Day preferences disabled'}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white dark:bg-stone-900 shadow-xs ring-0 transition duration-200 ease-in-out ${
+                      dayPreferencesEnabled ? 'translate-x-4' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+              <p className="text-[10px] text-stone-400 dark:text-stone-500 font-sans">
+                {dayPreferencesEnabled
+                  ? 'Switch is ON: Quick Plan factors in built-in media day affinities when choosing days.'
+                  : 'Switch is OFF: Quick Plan balances daily loads purely from today onward without media type biases.'}
+              </p>
+            </div>
+
             {/* Starter pack */}
             <button
               onClick={() => {
@@ -246,6 +535,74 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
                 </p>
               </div>
             </button>
+
+            {/* Analytics & Privacy Instrumentation */}
+            <div className="p-3.5 rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <span className="font-sans text-xs font-semibold text-stone-900 dark:text-stone-100 block">
+                    Turn off analytics on this device
+                  </span>
+                  <p className="text-[11px] text-stone-500 mt-0.5">
+                    Prevent Umami analytics script from tracking events or pageviews
+                  </p>
+                </div>
+                {/* Analytics Off/On Toggle */}
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={analyticsOff}
+                  onClick={handleToggleAnalyticsOff}
+                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden ${
+                    analyticsOff ? 'bg-black dark:bg-white' : 'bg-stone-200 dark:bg-stone-700'
+                  }`}
+                  title={analyticsOff ? 'Analytics is disabled' : 'Analytics is active'}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white dark:bg-stone-900 shadow-xs ring-0 transition duration-200 ease-in-out ${
+                      analyticsOff ? 'translate-x-4' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              <div className="pt-2.5 border-t border-stone-100 dark:border-stone-800/80 flex items-center justify-between gap-2">
+                <div>
+                  <span className="text-[11px] font-sans text-stone-600 dark:text-stone-400 font-medium block">
+                    Local Session Log ({logCount} event{logCount === 1 ? '' : 's'})
+                  </span>
+                  <p className="text-[10px] text-stone-400 dark:text-stone-500">
+                    JSON with ISO timestamps · URLs & titles strictly omitted
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleCopySessionLog}
+                    className="px-2.5 py-1 rounded-lg text-xs font-sans font-medium bg-stone-100 hover:bg-stone-200 dark:bg-stone-800 dark:hover:bg-stone-750 text-stone-800 dark:text-stone-200 transition-colors cursor-pointer flex items-center gap-1"
+                  >
+                    {copiedLog ? (
+                      <>
+                        <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                        <span>Copied!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3 h-3 text-stone-500" />
+                        <span>Copy session log</span>
+                      </>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleClearSessionLog}
+                    className="px-2.5 py-1 rounded-lg text-xs font-sans font-medium text-stone-500 hover:text-red-600 dark:hover:text-red-400 transition-colors cursor-pointer"
+                  >
+                    Clear log
+                  </button>
+                </div>
+              </div>
+            </div>
 
             {/* Self-Check Tests Verification */}
             <div className="p-3 rounded-xl border border-stone-200 dark:border-stone-800 bg-stone-50/60 dark:bg-stone-900/60 space-y-2">

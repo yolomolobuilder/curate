@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Plus, ChevronRight, ChevronLeft } from 'lucide-react';
+import { Plus, ChevronRight, ChevronLeft, X, RotateCcw, Sparkles } from 'lucide-react';
 import { ContentItem, CalendarView, DayTheme, BudgetPreset } from '../types';
 import { ContentCard } from './ContentCard';
 import { ContinuationMarker } from './ContinuationMarker';
@@ -15,6 +15,8 @@ import {
   getEstimatedDuration,
 } from '../lib/timeAccounting';
 import { toDateStr, getWeekDates } from '../lib/dateUtils';
+import { getWeeklyReviewData } from '../lib/weeklyReview';
+import { trackEvent } from '../lib/analytics';
 
 interface CalendarGridProps {
   currentDate: Date;
@@ -24,7 +26,7 @@ interface CalendarGridProps {
   onSelectCard: (item: ContentItem) => void;
   onToggleComplete: (id: string, e: React.MouseEvent) => void;
   onTogglePriority?: (id: string, e: React.MouseEvent) => void;
-  onMoveItemToDate: (itemId: string, targetDateStr: string) => void;
+  onMoveItemToDate: (itemId: string, targetDateStr: string, method?: 'drag' | 'quick_move' | 'quick_plan' | 'modal') => void;
   onAddNewItemToDate?: (item: any, targetDateStr: string) => void;
   onAddForDate: (dateStr: string) => void;
   onOpenDayDrawer: (dateStr: string) => void;
@@ -33,6 +35,7 @@ interface CalendarGridProps {
   inboxItems?: ContentItem[];
   onApplyQuickPlan?: (assignments: { itemId: string; targetDateStr: string }[]) => void;
   onOpenQuickPlan?: (budgetMins?: number) => void;
+  onOpenWeeklyReview?: () => void;
 }
 
 export const CalendarGrid: React.FC<CalendarGridProps> = ({
@@ -52,10 +55,46 @@ export const CalendarGrid: React.FC<CalendarGridProps> = ({
   inboxItems = [],
   onApplyQuickPlan,
   onOpenQuickPlan,
+  onOpenWeeklyReview,
 }) => {
   const [dragOverDate, setDragOverDate] = useState<string | null>(null);
   const [monthlyStyle, setMonthlyStyle] = useState<'visual' | 'text-only'>('visual');
   const [isQuickPlanOpen, setIsQuickPlanOpen] = useState(false);
+
+  // Previous-week review data and dismissal state
+  const prevWeekData = useMemo(
+    () => getWeeklyReviewData(items, currentDate),
+    [items, currentDate]
+  );
+
+  const [isBannerDismissed, setIsBannerDismissed] = useState<boolean>(() => {
+    try {
+      return (
+        localStorage.getItem(`curatecal_dismissed_review_${prevWeekData.range.startStr}`) ===
+        'true'
+      );
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      const dismissed =
+        localStorage.getItem(`curatecal_dismissed_review_${prevWeekData.range.startStr}`) ===
+        'true';
+      setIsBannerDismissed(dismissed);
+    } catch {
+      setIsBannerDismissed(false);
+    }
+  }, [prevWeekData.range.startStr]);
+
+  const handleDismissBanner = () => {
+    setIsBannerDismissed(true);
+    try {
+      localStorage.setItem(`curatecal_dismissed_review_${prevWeekData.range.startStr}`, 'true');
+    } catch {}
+  };
 
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
@@ -126,11 +165,23 @@ export const CalendarGrid: React.FC<CalendarGridProps> = ({
 
   useEffect(() => {
     setBudgetState(getStoredWeekBudget(weekKey));
+
+    const handleBudgetUpdated = (e: any) => {
+      if (e.detail?.weekKey === weekKey) {
+        setBudgetState({
+          availableMinutes: e.detail.availableMinutes,
+          preset: e.detail.preset,
+        });
+      }
+    };
+    window.addEventListener('curatecal:budget_updated', handleBudgetUpdated);
+    return () => window.removeEventListener('curatecal:budget_updated', handleBudgetUpdated);
   }, [weekKey]);
 
   const handleBudgetChange = (mins: number, preset: BudgetPreset) => {
     setBudgetState({ availableMinutes: mins, preset });
     saveStoredWeekBudget(weekKey, mins, preset);
+    trackEvent('budget_changed', { preset });
   };
 
   const weekDateSet = useMemo(() => new Set(weekDays.map((w) => w.dateStr)), [weekDays]);
@@ -174,11 +225,11 @@ export const CalendarGrid: React.FC<CalendarGridProps> = ({
           return;
         }
         if (parsed.id) {
-          onMoveItemToDate(parsed.id, targetDateStr);
+          onMoveItemToDate(parsed.id, targetDateStr, 'drag');
           return;
         }
       } catch {
-        onMoveItemToDate(raw, targetDateStr);
+        onMoveItemToDate(raw, targetDateStr, 'drag');
       }
     }
   };
@@ -404,8 +455,73 @@ export const CalendarGrid: React.FC<CalendarGridProps> = ({
                 <ChevronRight className="w-3.5 h-3.5" />
               </button>
             </div>
+
+            {onOpenWeeklyReview && (
+              <button
+                type="button"
+                onClick={onOpenWeeklyReview}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-sans rounded-lg border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 text-stone-700 dark:text-stone-300 hover:text-stone-900 dark:hover:text-stone-100 hover:bg-stone-50 dark:hover:bg-stone-850 transition-colors cursor-pointer shadow-2xs"
+                title="Review previous-week totals & triage unfinished items"
+              >
+                <RotateCcw className="w-3 h-3 text-stone-400" />
+                <span>Weekly Review</span>
+                {prevWeekData.totals.unfinishedCount > 0 && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                )}
+              </button>
+            )}
           </div>
         </div>
+
+        {/* Start-of-Week Review Banner (Non-intrusive, dismissible) */}
+        {!isBannerDismissed &&
+          (prevWeekData.totals.totalItemsCount > 0 ||
+            prevWeekData.totals.unfinishedCount > 0) && (
+            <div className="mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-2xl bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200/70 dark:border-amber-900/40 text-xs font-sans text-stone-700 dark:text-stone-300 animate-in fade-in duration-200">
+              <div className="flex items-center gap-2.5">
+                <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
+                <span>
+                  <strong className="font-medium text-stone-900 dark:text-stone-100">
+                    New week
+                  </strong>{' '}
+                  · Previous week ({prevWeekData.range.label}):{' '}
+                  <span className="tabular-nums font-mono font-medium text-stone-900 dark:text-stone-100">
+                    {formatHoursMinutes(prevWeekData.totals.completedMinutes)}
+                  </span>{' '}
+                  /{' '}
+                  <span className="tabular-nums font-mono text-stone-600 dark:text-stone-400">
+                    {formatHoursMinutes(prevWeekData.totals.plannedMinutes)}
+                  </span>{' '}
+                  completed
+                  {prevWeekData.totals.unfinishedCount > 0 && (
+                    <span className="text-amber-700 dark:text-amber-400 font-medium ml-1">
+                      ({prevWeekData.totals.unfinishedCount} unfinished)
+                    </span>
+                  )}
+                </span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+                {onOpenWeeklyReview && (
+                  <button
+                    type="button"
+                    onClick={onOpenWeeklyReview}
+                    className="px-3 py-1 rounded-full text-xs font-medium bg-black text-white dark:bg-white dark:text-black hover:opacity-90 transition-opacity cursor-pointer shadow-2xs"
+                  >
+                    Review Previous Week →
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleDismissBanner}
+                  className="p-1 text-stone-400 hover:text-stone-600 dark:hover:text-stone-200 transition-colors cursor-pointer"
+                  title="Dismiss banner"
+                  aria-label="Dismiss banner"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
 
         {/* Time Budget Status & Quick Plan Header (Sticky above week columns) */}
         <TimeBudgetHeader
@@ -661,6 +777,7 @@ export const CalendarGrid: React.FC<CalendarGridProps> = ({
         )}
         availableBudgetMinutes={budgetState.availableMinutes}
         dayThemes={dayThemes}
+        onNavigateNextWeek={() => navigateWeek(1)}
       />
     </div>
   );

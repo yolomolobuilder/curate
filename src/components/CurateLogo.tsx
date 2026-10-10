@@ -3,16 +3,18 @@ import React from 'react';
 interface CurateLogoProps {
   className?: string;
   size?: number;
+  color?: string;
 }
 
 export const CurateLogo: React.FC<CurateLogoProps> = ({
   className = 'w-6 h-6',
   size,
+  color,
 }) => {
   return (
     <svg
       viewBox="0 0 100 100"
-      fill="currentColor"
+      fill={color || 'currentColor'}
       className={className}
       style={size ? { width: size, height: size } : undefined}
       xmlns="http://www.w3.org/2000/svg"

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Clock,
   Zap,
@@ -8,7 +8,11 @@ import {
   Sliders,
 } from 'lucide-react';
 import { BudgetPreset, BUDGET_PRESET_MINUTES } from '../types';
-import { formatHoursMinutes } from '../lib/timeAccounting';
+import {
+  formatHoursMinutes,
+  parseDurationInput,
+  formatDurationCompact,
+} from '../lib/timeAccounting';
 
 interface TimeBudgetHeaderProps {
   availableMinutes: number;
@@ -42,8 +46,24 @@ export const TimeBudgetHeader: React.FC<TimeBudgetHeaderProps> = ({
 }) => {
   const [isEditingCustom, setIsEditingCustom] = useState(false);
   const [customInputValue, setCustomInputValue] = useState(() =>
-    String(Math.round(availableMinutes))
+    formatDurationCompact(availableMinutes)
   );
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Sync formatted custom duration when availableMinutes updates externally
+  useEffect(() => {
+    if (!isEditingCustom) {
+      setCustomInputValue(formatDurationCompact(availableMinutes));
+    }
+  }, [availableMinutes, isEditingCustom]);
+
+  // Auto focus and select input when opening inline editor
+  useEffect(() => {
+    if (isEditingCustom && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [isEditingCustom]);
 
   const isOverBudget = plannedMinutes > availableMinutes;
   const remainingMinutes = availableMinutes - plannedMinutes;
@@ -52,8 +72,13 @@ export const TimeBudgetHeader: React.FC<TimeBudgetHeaderProps> = ({
 
   const handleSelectPreset = (preset: BudgetPreset) => {
     if (preset === 'custom') {
-      setIsEditingCustom(true);
-      setCustomInputValue(String(availableMinutes));
+      if (currentPreset === 'custom') {
+        setIsEditingCustom((prev) => !prev);
+      } else {
+        setIsEditingCustom(true);
+        onBudgetChange(availableMinutes, 'custom');
+      }
+      setCustomInputValue(formatDurationCompact(availableMinutes));
     } else {
       setIsEditingCustom(false);
       const mins = BUDGET_PRESET_MINUTES[preset];
@@ -61,13 +86,20 @@ export const TimeBudgetHeader: React.FC<TimeBudgetHeaderProps> = ({
     }
   };
 
-  const handleApplyCustom = (e: React.FormEvent) => {
-    e.preventDefault();
-    const val = parseInt(customInputValue, 10);
-    if (!isNaN(val) && val > 0) {
-      onBudgetChange(val, 'custom');
+  const handleApplyCustom = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const parsed = parseDurationInput(customInputValue);
+    if (parsed && parsed > 0) {
+      onBudgetChange(parsed, 'custom');
+      setIsEditingCustom(false);
+    } else {
+      setCustomInputValue(formatDurationCompact(availableMinutes));
       setIsEditingCustom(false);
     }
+  };
+
+  const handleBlurCustom = () => {
+    handleApplyCustom();
   };
 
   return (
@@ -106,25 +138,25 @@ export const TimeBudgetHeader: React.FC<TimeBudgetHeaderProps> = ({
 
             <div className="h-7 w-px bg-stone-200 dark:bg-stone-800" />
 
-            {/* REMAINING or OVER BUDGET */}
+            {/* REMAINING or OVER BUDGET - Strictly gray branding (no green or red) */}
             <div className="flex flex-col">
               <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400 dark:text-stone-500">
                 {isOverBudget ? 'Budget Status' : 'Remaining'}
               </span>
               {isOverBudget ? (
-                <span className="inline-flex items-center gap-1 font-sans text-xs sm:text-sm font-semibold text-rose-600 dark:text-rose-400 tabular-nums">
-                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                  <span>OVER BUDGET (+{formatHoursMinutes(plannedMinutes - availableMinutes)})</span>
+                <span className="inline-flex items-center gap-1 font-sans text-xs sm:text-sm font-medium text-stone-700 dark:text-stone-300 tabular-nums">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0 text-stone-400 dark:text-stone-500" />
+                  <span>Over budget (+{formatHoursMinutes(plannedMinutes - availableMinutes)})</span>
                 </span>
               ) : (
-                <span className="font-serif text-base sm:text-lg font-medium text-emerald-700 dark:text-emerald-400 tabular-nums">
+                <span className="font-serif text-base sm:text-lg font-medium text-stone-700 dark:text-stone-300 tabular-nums">
                   {formatHoursMinutes(remainingMinutes)}
                 </span>
               )}
             </div>
           </div>
 
-          {/* Visual capacity progress bar */}
+          {/* Visual capacity progress bar - Monochrome stone fill */}
           <div className="hidden xl:flex flex-col w-36 gap-1">
             <div className="flex items-center justify-between text-[10px] font-mono text-stone-400">
               <span>Capacity</span>
@@ -132,13 +164,7 @@ export const TimeBudgetHeader: React.FC<TimeBudgetHeaderProps> = ({
             </div>
             <div className="w-full h-1.5 rounded-full bg-stone-100 dark:bg-stone-800 overflow-hidden">
               <div
-                className={`h-full transition-all duration-300 rounded-full ${
-                  isOverBudget
-                    ? 'bg-rose-500'
-                    : percentUsed > 85
-                    ? 'bg-amber-500'
-                    : 'bg-emerald-500'
-                }`}
+                className="h-full transition-all duration-300 rounded-full bg-stone-800 dark:bg-stone-200"
                 style={{ width: `${Math.min(100, (plannedMinutes / (availableMinutes || 1)) * 100)}%` }}
               />
             </div>
@@ -152,47 +178,76 @@ export const TimeBudgetHeader: React.FC<TimeBudgetHeaderProps> = ({
             <span className="text-[11px] font-sans text-stone-400 dark:text-stone-500 mr-1 hidden sm:inline">
               Budget:
             </span>
-            {PRESET_OPTIONS.map((preset) => (
-              <button
-                key={preset}
-                type="button"
-                onClick={() => handleSelectPreset(preset)}
-                className={`px-2.5 py-1 rounded-full text-xs font-sans transition-all cursor-pointer font-medium ${
-                  currentPreset === preset
-                    ? 'bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900 shadow-2xs'
-                    : 'bg-stone-100 dark:bg-stone-850 text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:bg-stone-200/70 dark:hover:bg-stone-800'
-                }`}
-              >
-                {preset === 'custom' ? 'Custom' : preset}
-              </button>
-            ))}
-          </div>
+            {PRESET_OPTIONS.map((preset) => {
+              if (preset === 'custom') {
+                if (isEditingCustom) {
+                  return (
+                    <form
+                      key="custom"
+                      onSubmit={handleApplyCustom}
+                      className="inline-flex items-center gap-1 bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900 px-2 py-0.5 rounded-full shadow-2xs animate-in fade-in"
+                    >
+                      <input
+                        ref={inputRef}
+                        type="text"
+                        value={customInputValue}
+                        onChange={(e) => setCustomInputValue(e.target.value)}
+                        onBlur={handleBlurCustom}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Escape') {
+                            setIsEditingCustom(false);
+                            setCustomInputValue(formatDurationCompact(availableMinutes));
+                          }
+                        }}
+                        placeholder="e.g. 4h"
+                        className="w-16 bg-transparent text-xs font-mono text-center text-white dark:text-stone-900 placeholder:text-stone-400 dark:placeholder:text-stone-500 focus:outline-hidden"
+                      />
+                      <button
+                        type="submit"
+                        title="Apply custom budget"
+                        className="p-0.5 rounded-full hover:opacity-75 transition-opacity cursor-pointer"
+                      >
+                        <Check className="w-3 h-3" />
+                      </button>
+                    </form>
+                  );
+                }
 
-          {/* Inline Custom Editor */}
-          {isEditingCustom && (
-            <form
-              onSubmit={handleApplyCustom}
-              className="flex items-center gap-1 bg-stone-100 dark:bg-stone-850 px-2 py-1 rounded-full border border-stone-200 dark:border-stone-700 animate-in fade-in"
-            >
-              <input
-                type="number"
-                min="5"
-                max="3000"
-                value={customInputValue}
-                onChange={(e) => setCustomInputValue(e.target.value)}
-                placeholder="mins"
-                className="w-16 bg-transparent text-xs font-mono text-stone-900 dark:text-stone-100 focus:outline-hidden text-center"
-                autoFocus
-              />
-              <span className="text-[10px] text-stone-400 font-sans">mins</span>
-              <button
-                type="submit"
-                className="p-1 rounded-full bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900 hover:opacity-90 transition-opacity"
-              >
-                <Check className="w-3 h-3" />
-              </button>
-            </form>
-          )}
+                return (
+                  <button
+                    key="custom"
+                    type="button"
+                    onClick={() => handleSelectPreset('custom')}
+                    title="Set custom weekly budget"
+                    className={`px-2.5 py-1 rounded-full text-xs font-sans transition-all cursor-pointer font-medium ${
+                      currentPreset === 'custom'
+                        ? 'bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900 shadow-2xs'
+                        : 'bg-stone-100 dark:bg-stone-850 text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:bg-stone-200/70 dark:hover:bg-stone-800'
+                    }`}
+                  >
+                    {currentPreset === 'custom'
+                      ? `Custom (${formatDurationCompact(availableMinutes)})`
+                      : 'Custom'}
+                  </button>
+                );
+              }
+
+              return (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => handleSelectPreset(preset)}
+                  className={`px-2.5 py-1 rounded-full text-xs font-sans transition-all cursor-pointer font-medium ${
+                    currentPreset === preset
+                      ? 'bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900 shadow-2xs'
+                      : 'bg-stone-100 dark:bg-stone-850 text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:bg-stone-200/70 dark:hover:bg-stone-800'
+                  }`}
+                >
+                  {preset}
+                </button>
+              );
+            })}
+          </div>
 
           {/* Quick Plan CTA Button */}
           <button
@@ -202,7 +257,7 @@ export const TimeBudgetHeader: React.FC<TimeBudgetHeaderProps> = ({
             className="flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-sans font-medium text-white bg-black dark:bg-white dark:text-black hover:opacity-90 transition-all cursor-pointer shadow-xs disabled:opacity-40 disabled:cursor-not-allowed"
             title="Automatically schedule items within weekly budget"
           >
-            <Zap className="w-3.5 h-3.5 fill-current text-amber-400 dark:text-amber-500" />
+            <Zap className="w-3.5 h-3.5 fill-current text-stone-400 dark:text-stone-500" />
             <span>Quick Plan</span>
           </button>
         </div>

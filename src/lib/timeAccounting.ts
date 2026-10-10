@@ -233,3 +233,72 @@ export function calculateTimeForMonth(
 
   return { plannedMinutes, completedMinutes, itemCount };
 }
+
+/**
+ * Flexible duration parser that converts human input like '4h', '4', '240m', '1h 30m', '2.5h' into minutes.
+ * - Handles '4h', '4 hrs', '4 hours' -> 240
+ * - Handles '90m', '90 mins', '90 minutes' -> 90
+ * - Handles '1h 30m', '2h 15min' -> 90, 135
+ * - Handles '2.5h' or '1,5h' -> 150, 90
+ * - Handles bare numbers without units:
+ *   If <= 16, assumes hours (e.g. '4' -> 240 mins) for weekly budget intent.
+ *   If > 16, assumes minutes (e.g. '90' -> 90 mins).
+ * Returns null if invalid or <= 0.
+ */
+export function parseDurationInput(input: string): number | null {
+  if (!input) return null;
+  const trimmed = input.trim().toLowerCase().replace(',', '.');
+  if (!trimmed) return null;
+
+  // Pattern 1: Combined hours and minutes, e.g. "2h 30m" or "2h30m" or "1 hour 20 mins"
+  const comboMatch = trimmed.match(/^(\d+(?:\.\d+)?)\s*(?:h|hr|hrs|hours?)\s*(\d+)\s*(?:m|min|mins|minutes?)?$/);
+  if (comboMatch) {
+    const hours = parseFloat(comboMatch[1]);
+    const mins = parseInt(comboMatch[2], 10);
+    if (!isNaN(hours) && !isNaN(mins)) {
+      return Math.round(hours * 60 + mins);
+    }
+  }
+
+  // Pattern 2: Explicit hours, e.g. "4h", "2.5h", "3 hours", "1.5 hrs"
+  const hoursMatch = trimmed.match(/^(\d+(?:\.\d+)?)\s*(?:h|hr|hrs|hours?)$/);
+  if (hoursMatch) {
+    const hours = parseFloat(hoursMatch[1]);
+    if (!isNaN(hours) && hours > 0) {
+      return Math.round(hours * 60);
+    }
+  }
+
+  // Pattern 3: Explicit minutes, e.g. "90m", "45 mins", "120 min"
+  const minsMatch = trimmed.match(/^(\d+)\s*(?:m|min|mins|minutes?)$/);
+  if (minsMatch) {
+    const mins = parseInt(minsMatch[1], 10);
+    if (!isNaN(mins) && mins > 0) {
+      return mins;
+    }
+  }
+
+  // Pattern 4: Bare number (with possible decimal), e.g. "4", "2.5", "120"
+  const bareNum = parseFloat(trimmed);
+  if (!isNaN(bareNum) && bareNum > 0) {
+    // If <= 16, assume hours for weekly budget intent; if > 16, assume minutes
+    if (bareNum <= 16) {
+      return Math.round(bareNum * 60);
+    }
+    return Math.round(bareNum);
+  }
+
+  return null;
+}
+
+/**
+ * Compact duration string representation for custom inputs, e.g. 240 -> "4h", 90 -> "1h 30m"
+ */
+export function formatDurationCompact(mins: number): string {
+  if (mins <= 0) return '0m';
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  if (h > 0 && m === 0) return `${h}h`;
+  if (h === 0) return `${m}m`;
+  return `${h}h ${m}m`;
+}

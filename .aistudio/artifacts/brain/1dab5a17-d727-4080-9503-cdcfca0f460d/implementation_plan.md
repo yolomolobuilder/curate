@@ -1,129 +1,103 @@
-# Inbox & Backlog Management for Larger Collections
+# Budget Status Neutral Styling & Custom Weekly Budget Fix
 
-A high-density, ergonomic inbox and backlog system designed to handle large content libraries without horizontal scrolling, featuring multi-dimensional filtering, dropdown controls for topics and durations, a single-click priority toggle, backlog summary metrics, and a direct "Plan 2h" Quick Plan workflow.
+Align the calendar budget status and capacity indicators to Curate's minimal editorial brand palette (subtle stone gray tones, removing green and red accents), and repair the custom budget option on the week calendar view with flexible inline input parsing (e.g. `4h`, `240m`, `1h 30m`).
 
-### User Review & Critical Decisions
+## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> The following user preferences were confirmed during the Phase 1 clarification interview:
-> - **Filter Layout (No Horizontal Scroll)**: Replace the single horizontally scrolling row with a structured 2–3 line vertical header that wraps cleanly and prevents any horizontal scrolling (`overflow-x-hidden`).
-> - **Filter Controls Hierarchy**: Keep primary Content Types and Statuses as compact wrapping chips on the top lines, while placing Topic and Duration selections into space-saving dropdown menus to preserve maximum vertical space for content cards.
-> - **"Plan 2h" Action**: Opens the standard Quick Plan modal pre-configured with a 2-hour (120-minute) scheduling budget.
-> - **Anti-Bloat Guardrail**: No folders, nested databases, complex tagging hierarchies, or AI categorizations.
+> The following preferences were confirmed during clarification and will govern the implementation:
+
+- **Confirmed Decision 1 (Custom Budget Input)**: Direct inline input supporting natural human expressions like `4h`, `240m`, `1.5h`, or `2h 30m` directly inside the weekly budget preset bar, auto-committing on Enter or blur with Escape cancellation.
+- **Confirmed Decision 2 (Budget Status Aesthetics)**: Subtle stone gray typography for both remaining and over-budget states, paired with a sleek monochrome stone capacity bar (`stone-800` / `stone-200`) completely replacing green (`emerald`) and red (`rose`) tokens.
 
 ---
 
-### 1. Overview & Core Concept
+## 1. Overview & Core Concept
 
-- **What It Does**: Evolves the single-column Inbox drawer into a complete, scalable personal content backlog. Users can quickly filter hundreds of items across content format (Videos, Articles, Podcasts, Books), scheduling lifecycle (Unscheduled, Scheduled, Completed), topics (Marketing, UX/UI, German, English, Health, Fitness, and Other), and consumption duration (<15m, 15–30m, 30–60m, 1h+).
-- **Target Audience / Persona**: Knowledge workers, self-directed learners, and media curators with extensive reading and viewing backlogs who need to triage, prioritize, and plan without feeling overwhelmed.
-- **Key Value**: Eliminates horizontal scroll clutter, provides immediate backlog time inventory (e.g. `23 unplanned · 7h 42m total`), and offers a 1-click bridge from backlog to weekly calendar execution ("Plan 2h").
-
----
-
-### 2. User Experience & Visual Design
-
-#### Key User Flows
-1. **Backlog Inspection & Metric Scannability**:
-   - The user opens the Inbox drawer from the top navigation bar.
-   - At the top, a clean summary header displays exact backlog volume: `{N} unplanned · {X}h {Y}m total` (with tabular figures), alongside the action button `Plan 2h →`.
-2. **Multi-Dimensional Filtering (2–3 Lines, Zero Horizontal Scroll)**:
-   - **Line 1 (Status & Priority)**: Segmented status tabs (`Unscheduled`, `Scheduled`, `Completed`, `All`) + single-click `★ Priority Only` toggle button.
-   - **Line 2 (Content Types)**: Compact wrapping pill buttons (`All`, `Videos`, `Articles`, `Podcasts`, `Books`).
-   - **Line 3 (Dropdowns & Sorting)**:
-     - **Topic Dropdown**: `All Topics`, `Marketing`, `UX/UI`, `German`, `English`, `Health`, `Fitness`, `Other`.
-     - **Duration Dropdown**: `Any Duration`, `<15m`, `15–30m`, `30–60m`, `1h+`.
-     - **Sort Dropdown**: `Newest`, `Oldest`, `Shortest`, `Longest`, `Priority First`.
-3. **One Simple Priority Toggle**:
-   - On every content card and within the drawer filter header, users can toggle a high-visibility star priority flag (`isPriority: boolean`).
-   - Toggling the drawer's `★ Priority` filter instantly isolates starred items.
-4. **"Plan 2h" Quick Planning Flow**:
-   - The user clicks `Plan 2h →`.
-   - The Quick Plan modal immediately opens with a 120-minute (2-hour) budget preset, automatically proposing an optimized weekly schedule from their backlog.
-
-#### Visual Identity & Layout Math
-- **Container Geometry**: Fixed right drawer ($360\text{px}$–$390\text{px}$ on desktop, $100\%$ on mobile) with strictly `overflow-x-hidden` and `overflow-y-auto`.
-- **Palette & Typography**:
-  - Warm neutral canvas (`#FAF9F6` light / `#0C0C0C` dark) with hairline dividers (`border-stone-200/50 dark:border-stone-850`).
-  - Serif headline (`font-serif`) for natural editorial feel; clean tabular numerals (`font-mono tabular-nums`) for duration counts and summaries.
-  - Active filter chips use high-contrast solid black/white (`bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900`).
-- **Interactive Feedback**:
-  - Live filter count recalculations in $<50\text{ms}$.
-  - Micro-animations on star toggle (`scale-110` pop).
-  - Empty states explaining which specific filter combination resulted in zero matches, with a "Reset Filters" quick action.
+- **What It Does**:
+  - Restyles the calendar's weekly time budget status metrics, over-budget warnings, and capacity progress bar to strictly use Curate's neutral editorial grayscale/stone palette.
+  - Fixes the "Custom" weekly budget control in `TimeBudgetHeader` so users can seamlessly click "Custom", type their target weekly time in natural hours or minutes (e.g. `4h`, `90m`, `3.5h`), and have it instantly update the week's capacity calculations, remaining time metrics, and localStorage persistence.
+- **Target Audience & Workflow**: Users managing their weekly media, reading, and learning commitments in Curate who need an accurate, friction-free budget planner matching the app's refined aesthetic.
+- **Key Value**: Restores full control over weekly schedule capacity while preserving a clean, distraction-free monochrome visual tone.
 
 ---
 
-### 3. Key Product Decisions & Trade-Offs
+## 2. User Experience & Visual Design
 
-- **Decision 1: Hoisting Quick Plan State to App Level**:
-  - *Chosen Approach*: Move `QuickPlanModal` orchestration to `App.tsx` so both `CalendarGrid` and `InboxDrawer` can trigger planning with custom presets (such as `Plan 2h`).
-  - *Why*: Eliminates prop drilling and allows the user to trigger "Plan 2h" directly while browsing the inbox on any view.
-  - *Alternative Considered*: Only allowing Quick Plan from CalendarGrid view, which would force the user to close Inbox, switch tabs, and click Quick Plan.
-- **Decision 2: Dropdowns for Topics and Durations vs. Wrapped Chip Wall**:
-  - *Chosen Approach*: Use custom accessible `<select>` / popover menus for Topic and Duration, while keeping Format and Status as 1-click segmented chips.
-  - *Why*: Preserves 120px+ of vertical card viewport height that would otherwise be consumed by 12+ individual topic and duration chips.
-- **Decision 3: Single Priority Flag vs. Multi-Tier Priority (P1/P2/P3)**:
-  - *Chosen Approach*: Binary `isPriority: boolean` (Starred vs. Unstarred).
-  - *Why*: Directly honors the prompt requirement ("Add one simple Priority toggle, not a task-manager priority system"), preventing cognitive decision fatigue.
+### Key User Flows
+
+1. **Viewing Weekly Budget Status**:
+   - The user opens the Week view on the calendar.
+   - The header displays Available time, Planned time, Done time, and Remaining / Over Budget status.
+   - All status readouts render in serene stone grays (`text-stone-600 dark:text-stone-300` / `text-stone-700 dark:text-stone-200`) instead of harsh emerald green and rose red.
+   - The capacity bar fills with a smooth dark stone indicator (`bg-stone-800 dark:bg-stone-200`) against a subtle neutral track (`bg-stone-100 dark:bg-stone-800`).
+2. **Setting a Custom Weekly Budget**:
+   - The user clicks the **Custom** preset pill in the weekly budget header.
+   - An inline input immediately appears in place of or adjacent to the Custom button, pre-populated with the current budget (e.g., `3h` or `180m`).
+   - The user can type `4h`, `4.5h`, `250m`, or `3h 15m`.
+   - Pressing **Enter**, clicking the check button, or unfocusing (blur) parses the input, stores the total minutes in localStorage, updates the week's budget state, and marks the Custom pill as actively selected.
+   - Pressing **Escape** discards edits without modifying the existing budget.
+
+### Visual Identity & Theme Tokens
+
+- **Budget Status Text**:
+  - Normal/Remaining: `text-stone-600 dark:text-stone-300 font-serif` (tabular numerals)
+  - Over Budget: `text-stone-800 dark:text-stone-200 font-sans font-medium` with quiet `text-stone-500` secondary text and neutral alert icon
+- **Capacity Bar**:
+  - Track: `bg-stone-100 dark:bg-stone-800/80`
+  - Fill: `bg-stone-800 dark:bg-stone-200` (neutral monochrome across all capacity levels)
+- **Inline Custom Editor**:
+  - Subtle stone container (`bg-stone-100 dark:bg-stone-850 border-stone-200 dark:border-stone-700`)
+  - Crisp monospace font (`font-mono text-xs`) with placeholder `e.g. 4h or 240m`
 
 ---
 
-### 4. Technical Architecture & Data Strategy
+## 3. Key Product Decisions & Trade-Offs
+
+- **Flexible Time Parsing Function (`parseDurationInput`)**:
+  - *Chosen Approach*: Implement a robust duration parser that understands raw numbers, decimals, and hour/minute units (`4`, `4h`, `4.5h`, `4 hrs`, `4 hours`, `90m`, `90 mins`, `2h 30m`). For bare numbers without units: $\le 16$ is interpreted as hours (e.g. entering `4` yields 240 minutes for a weekly budget), while $> 16$ is interpreted as minutes (e.g. entering `90` yields 90 minutes).
+  - *Why*: Eliminates the previous failure where users typed `4` intending 4 hours, which was either rejected by `min="5"` or scheduled 4 minutes of weekly content.
+- **Monochrome Capacity Bar**:
+  - *Chosen Approach*: Replace green/amber/rose color shifts with a uniform stone charcoal bar.
+  - *Why*: Satisfies the user's explicit branding requirement ("green and red are not part of the branding") while maintaining visual feedback via percentage label and bar width.
+
+---
+
+## 4. Technical Architecture & Data Strategy
+
+### Component & Data Flow Diagram
 
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│                                App.tsx                                 │
-│  - allItems: ContentItem[]                                            │
-│  - isQuickPlanOpen, quickPlanPresetMinutes (default 120m)             │
-└─────────────────────────────────┬──────────────────────────────────────┘
-                                  │
-         ┌────────────────────────┴─────────────────────────┐
-         ▼                                                  ▼
-┌──────────────────────────────────┐      ┌──────────────────────────────┐
-│           TopNav.tsx             │      │       CalendarGrid.tsx       │
-│  - Inbox toggle with badge count │      │  - Week/Month grid           │
-└──────────────────────────────────┘      └──────────────────────────────┘
-         │                                                  ▲
-         ▼                                                  │
-┌───────────────────────────────────────────────────────────┴────────────┐
-│                            InboxDrawer.tsx                             │
-│  ├─ Header & Backlog Summary ("23 unplanned · 7h 42m total")           │
-│  ├─ "Plan 2h →" Action Button                                          │
-│  ├─ Line 1: Status Filter Tabs (Unscheduled, Scheduled, Done, All)     │
-│  │          + Priority Toggle (★ Starred)                             │
-│  ├─ Line 2: Content Type Chips (All, Videos, Articles, Podcasts, Books)│
-│  ├─ Line 3: Dropdowns (Topic, Duration Range, Sort Order)             │
-│  └─ Vertically Scrolling Card Stream (Zero Horizontal Scroll)          │
-└────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                       CalendarGrid                          │
+│  State: budgetState { availableMinutes, preset }            │
+│  Storage: curatecal_week_budget_<weekKey>                   │
+└──────────────────────────────┬──────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    TimeBudgetHeader                         │
+│  Props: availableMinutes, plannedMinutes, currentPreset     │
+│  - Neutral Stone Gray Status Typography (No Green/Red)      │
+│  - Monochrome Capacity Bar (bg-stone-800 / bg-stone-200)   │
+│  - Preset Buttons: 30m | 1h | 2h | 3h | 5h | 7h | 10h       │
+│  - Custom Preset Button & Inline Flexible Parser:           │
+│      "4h" / "240m" / "1h 30m" ──► parseDurationInput()      │
+│                                      │                      │
+│                                      ▼                      │
+│                           onBudgetChange(mins, 'custom')    │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-#### State & Data Filtering Pipeline
-1. **Item Pool**:
-   - Base items received from `App.tsx` (`items: ContentItem[]`).
-2. **Filter Pipeline**:
-   - `statusFilter`: `'unscheduled'` (`status === 'inbox'`), `'scheduled'` (`status === 'planned' || status === 'in_progress'`), `'completed'` (`status === 'completed'`), or `'all'`.
-   - `typeFilter`: `'all' | 'video' | 'article' | 'podcast' | 'book'`.
-   - `topicFilter`: `'all' | 'Marketing' | 'UX/UI' | 'German' | 'English' | 'Health' | 'Fitness' | 'other'`.
-   - `durationFilter`: `'all' | '<15m' | '15-30m' | '30-60m' | '1h+'`.
-   - `priorityOnly`: `boolean`.
-   - `sortBy`: `'newest' | 'oldest' | 'shortest' | 'longest' | 'priority'`.
-3. **Summary Metric Calculation**:
-   - `unplannedCount`: Count of items where `status === 'inbox'` or `!scheduledDate`.
-   - `unplannedMinutes`: Total duration of unplanned items formatted via `formatHoursMinutes`.
-   - `filteredCount` and `filteredMinutes`: Dynamic totals reflecting current active filters.
+### Component Adjustments
 
----
-
-### Verification Plan
-
-- **Automated Tests (`npm test`)**:
-  - Run the full existing 5-test Self-Check suite to ensure invariant accounting, local date formatting, activation rules, and export/import parity remain 100% passing.
-  - Add self-check assertions for backlog duration calculation and filter sorting.
-- **Codebase Linting & Compilation**:
-  - `npm run lint` (`tsc --noEmit`): 0 syntax or type errors.
-  - `compile_applet`: clean Vite build.
-- **UX & Visual Inspection**:
-  - Verify zero horizontal scrolling in the drawer across mobile ($375\text{px}$), laptop ($1024\text{px}$), and widescreen ($1440\text{px}$).
-  - Test each filter (Content type, Status, Topic, Duration, Priority) and sorting option.
-  - Click "Plan 2h" and verify Quick Plan modal opens with 120 minutes preset.
+1. **`src/lib/timeAccounting.ts`**:
+   - Add `parseDurationInput(input: string): number | null` to reliably parse user-entered strings (`"4h"`, `"4"`, `"90m"`, `"1h 30m"`, `"2.5h"`) into total minutes with bounds checking ($15\text{m} \le \text{mins} \le 6000\text{m}$).
+   - Add `formatDurationCompact(minutes: number): string` to format numbers cleanly as `"4h"`, `"90m"`, or `"2h 30m"`.
+2. **`src/components/TimeBudgetHeader.tsx`**:
+   - Remove `text-rose-600`, `text-rose-400`, `text-emerald-700`, `text-emerald-400`, `bg-rose-500`, `bg-emerald-500`, and `bg-amber-500`.
+   - Update Remaining & Over Budget status elements to use neutral `text-stone-600 dark:text-stone-300` and `text-stone-800 dark:text-stone-200`.
+   - Update Capacity progress bar fill to `bg-stone-800 dark:bg-stone-200`.
+   - Improve the "Custom" preset button behavior so clicking it opens the inline editor with current budget formatted (e.g. `4h`), auto-selects the text, allows inline editing, submits on Enter or blur, and properly updates the preset state to `'custom'`.
+3. **`src/components/QuickPlanModal.tsx`**:
+   - Ensure budget status text inside Quick Plan modal uses neutral stone styling instead of `text-rose-500` / `text-emerald-600`.

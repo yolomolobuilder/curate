@@ -7,7 +7,7 @@ import { getTodayStr } from '../lib/dateUtils';
 interface AddContentModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onAdd: (item: Omit<ContentItem, 'id' | 'createdAt'>) => void;
+  onAdd: (item: Omit<ContentItem, 'id' | 'createdAt'>, method?: 'paste' | 'quick_add' | 'sample') => void;
   availableTopics: string[];
   onAddCustomTopic: (topic: string) => void;
   initialDate?: string;
@@ -101,7 +101,7 @@ export const AddContentModal: React.FC<AddContentModalProps> = ({
       topic: topic || undefined,
       status: isInbox ? 'inbox' : 'planned',
       scheduledDate: isInbox ? undefined : (scheduledDate || undefined),
-    });
+    }, 'paste');
 
     // Reset & close
     setUrlInput('');

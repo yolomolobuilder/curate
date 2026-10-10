@@ -14,6 +14,9 @@ import {
   saveCustomTopic,
   generateCuratedStarterPack,
   clearStoredItems,
+  getStorageFailureInfo,
+  StorageFailureInfo,
+  exportBackupJson,
 } from './lib/storage';
 import { TopNav } from './components/TopNav';
 import { HomePage } from './components/HomePage';
@@ -30,15 +33,22 @@ import {
   recordActivationCalendarViewed,
   recordActivationPlanMyWeek,
 } from './lib/activation';
-import { RotateCcw, X } from 'lucide-react';
+import { RotateCcw, X, AlertCircle, Download } from 'lucide-react';
 import { calculateTimeForMonth, calculateTimeForDate } from './lib/timeAccounting';
 import { toDateStr, getOffsetDateStr, getTodayStr, getWeekDates } from './lib/dateUtils';
 import { QuickPlanModal } from './components/QuickPlanModal';
+import { WeeklyReviewModal } from './components/WeeklyReviewModal';
+import { trackEvent } from './lib/analytics';
 
 export default function App() {
   const [items, setItems] = useState<ContentItem[]>(() => getStoredItems());
   const [dayThemes] = useState<DayTheme[]>(() => getStoredDayThemes());
   const [availableTopics, setAvailableTopics] = useState<string[]>(() => getStoredCustomTopics());
+
+  // App opened event: fires exactly once on startup
+  useEffect(() => {
+    trackEvent('app_opened');
+  }, []);
 
   // Primary tab: 'home' (Cosmos discovery & visual library) vs 'calendar' (schedule)
   const [activeTab, setActiveTab] = useState<'home' | 'calendar'>(() => {
@@ -49,6 +59,11 @@ export default function App() {
   // Date navigation
   const [currentDate, setCurrentDate] = useState<Date>(() => new Date());
   const [view, setView] = useState<CalendarView>('month');
+
+  const handleViewChange = (newView: CalendarView) => {
+    setView(newView);
+    trackEvent('calendar_viewed', { view: newView });
+  };
 
   // Dark mode
   const [darkMode, setDarkMode] = useState<boolean>(() => {
@@ -76,6 +91,18 @@ export default function App() {
   const handleOpenQuickPlan = (presetMinutes?: number) => {
     setQuickPlanBudgetMinutes(presetMinutes ?? 120);
     setIsQuickPlanOpen(true);
+    trackEvent('quick_plan_opened');
+  };
+
+  // Weekly Review Modal state
+  const [isWeeklyReviewOpen, setIsWeeklyReviewOpen] = useState(false);
+
+  const handlePlanNextWeekFromReview = () => {
+    setIsWeeklyReviewOpen(false);
+    setActiveTab('calendar');
+    trackEvent('calendar_viewed', { view: 'week' });
+    setView('week');
+    handleOpenQuickPlan(quickPlanBudgetMinutes);
   };
 
   // Quick Plan Undo state & timer
@@ -83,6 +110,44 @@ export default function App() {
     previousItems: ContentItem[];
     message: string;
   } | null>(null);
+
+  // Storage failure safe mode tracking
+  const [storageFailure, setStorageFailure] = useState<StorageFailureInfo | null>(() =>
+    getStorageFailureInfo()
+  );
+
+  useEffect(() => {
+    const handleStorageError = (e: any) => {
+      setStorageFailure({
+        hasFailed: true,
+        errorMessage: e.detail?.error || 'Browser storage is full (quota exceeded).',
+        failedAt: new Date().toISOString(),
+        failedOperation: e.detail?.operation || 'save',
+      });
+    };
+
+    const handleStorageRecovered = () => {
+      setStorageFailure(null);
+    };
+
+    window.addEventListener('curatecal:storage_error', handleStorageError);
+    window.addEventListener('curatecal:storage_recovered', handleStorageRecovered);
+    return () => {
+      window.removeEventListener('curatecal:storage_error', handleStorageError);
+      window.removeEventListener('curatecal:storage_recovered', handleStorageRecovered);
+    };
+  }, []);
+
+  const handleExportBackup = () => {
+    const json = exportBackupJson();
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `curatecal-backup-${getTodayStr()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   useEffect(() => {
     if (!quickPlanUndoState) return;
@@ -131,7 +196,11 @@ export default function App() {
   };
 
   // Add Item
-  const handleAddItem = (newItemData: Omit<ContentItem, 'id' | 'createdAt'>) => {
+  const handleAddItem = (
+    newItemData: Omit<ContentItem, 'id' | 'createdAt'>,
+    method: 'paste' | 'quick_add' | 'sample' = 'paste'
+  ) => {
+    const effectiveMethod = newItemData.isSample ? 'sample' : method;
     const newItem: ContentItem = {
       ...newItemData,
       id: `item-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
@@ -140,12 +209,23 @@ export default function App() {
     const updated = [newItem, ...items];
     handleSaveItems(updated);
 
+    trackEvent('item_added', {
+      type: newItem.contentType,
+      method: effectiveMethod,
+    });
+
+    if (newItem.scheduledDate) {
+      trackEvent('item_planned', {
+        method: effectiveMethod === 'paste' ? 'modal' : 'quick_add',
+      });
+    }
+
     // Activation milestone tracking: sample items never count toward activation
     const activeCount = updated.filter((i) => !i.isSample && i.status !== 'completed').length;
     if (!newItem.isSample) {
-      recordActivationSave(activeCount, newItem.title, newItem.contentType, false);
+      recordActivationSave(activeCount, undefined, newItem.contentType, false);
       if (newItem.scheduledDate) {
-        recordActivationScheduled(newItem.id, newItem.scheduledDate, newItem.title, false);
+        recordActivationScheduled(newItem.id, newItem.scheduledDate, undefined, false);
       }
     }
   };
@@ -165,20 +245,43 @@ export default function App() {
     const updated = [newItem, ...items];
     handleSaveItems(updated);
 
+    trackEvent('item_added', {
+      type: newItem.contentType,
+      method: 'quick_add',
+    });
+    trackEvent('item_planned', {
+      method: 'drag',
+    });
+
     const activeCount = updated.filter((i) => !i.isSample && i.status !== 'completed').length;
     if (!newItem.isSample) {
-      recordActivationSave(activeCount, newItem.title, newItem.contentType, false);
-      recordActivationScheduled(newItem.id, targetDateStr, newItem.title, false);
+      recordActivationSave(activeCount, undefined, newItem.contentType, false);
+      recordActivationScheduled(newItem.id, targetDateStr, undefined, false);
     }
   };
 
   // Update Item
-  const handleUpdateItem = (id: string, updates: Partial<ContentItem>) => {
+  const handleUpdateItem = (
+    id: string,
+    updates: Partial<ContentItem>,
+    method?: 'drag' | 'quick_move' | 'quick_plan' | 'modal'
+  ) => {
     const target = items.find((it) => it.id === id);
     const updated = items.map((it) => (it.id === id ? { ...it, ...updates } : it));
     handleSaveItems(updated);
+
+    if (updates.scheduledDate && updates.scheduledDate !== target?.scheduledDate) {
+      trackEvent('item_planned', {
+        method: method || 'modal',
+      });
+    }
+
+    if (updates.status === 'completed' && target?.status !== 'completed') {
+      trackEvent('item_completed');
+    }
+
     if (updates.scheduledDate && (!target || !target.isSample)) {
-      recordActivationScheduled(id, updates.scheduledDate, updates.title || target?.title, false);
+      recordActivationScheduled(id, updates.scheduledDate, undefined, false);
     }
     if (selectedItem && selectedItem.id === id) {
       setSelectedItem((prev) => (prev ? { ...prev, ...updates } : null));
@@ -233,6 +336,10 @@ export default function App() {
       return it;
     });
     handleSaveItems(updated);
+    assignments.forEach(() => {
+      trackEvent('item_planned', { method: 'quick_plan' });
+    });
+    trackEvent('quick_plan_applied');
     setQuickPlanUndoState({
       previousItems: previous,
       message: `Quick Plan scheduled ${assignments.length} item${assignments.length === 1 ? '' : 's'}.`,
@@ -244,17 +351,26 @@ export default function App() {
     if (!quickPlanUndoState) return;
     handleSaveItems(quickPlanUndoState.previousItems);
     setQuickPlanUndoState(null);
+    trackEvent('quick_plan_undone');
   };
 
   // Move item to date
-  const handleMoveItemToDate = (itemId: string, targetDateStr: string) => {
+  const handleMoveItemToDate = (
+    itemId: string,
+    targetDateStr: string,
+    method: 'drag' | 'quick_move' | 'quick_plan' | 'modal' = 'quick_move'
+  ) => {
     const target = items.find((it) => it.id === itemId);
     if (!target) return;
-    handleUpdateItem(itemId, {
-      scheduledDate: targetDateStr,
-      status: target.status === 'inbox' ? 'planned' : target.status,
-    });
-    recordActivationScheduled(itemId, targetDateStr, target.title);
+    handleUpdateItem(
+      itemId,
+      {
+        scheduledDate: targetDateStr,
+        status: target.status === 'inbox' ? 'planned' : target.status,
+      },
+      method
+    );
+    recordActivationScheduled(itemId, targetDateStr, undefined);
   };
 
   // Move item to Inbox
@@ -288,6 +404,7 @@ export default function App() {
     const userUnscheduledCount = unscheduled.filter((u) => !u.isSample).length;
     recordActivationPlanMyWeek(Math.min(3, userUnscheduledCount));
     setActiveTab('calendar');
+    trackEvent('calendar_viewed', { view });
     recordActivationCalendarViewed('plan_my_week');
   };
 
@@ -296,6 +413,7 @@ export default function App() {
     setActiveTab(tab);
     if (tab === 'calendar') {
       recordActivationCalendarViewed('nav');
+      trackEvent('calendar_viewed', { view });
     }
   };
 
@@ -315,6 +433,9 @@ export default function App() {
   const handleLoadStarterPack = () => {
     const starters = generateCuratedStarterPack();
     handleSaveItems(starters);
+    starters.forEach((s) => {
+      trackEvent('item_added', { type: s.contentType, method: 'sample' });
+    });
   };
 
   // Navigation
@@ -392,7 +513,7 @@ export default function App() {
         onTabChange={handleTabChange}
         currentDate={currentDate}
         view={view}
-        onViewChange={setView}
+        onViewChange={handleViewChange}
         onPrev={handlePrev}
         onNext={handleNext}
         onToday={handleToday}
@@ -410,6 +531,7 @@ export default function App() {
         darkMode={darkMode}
         onToggleDarkMode={() => setDarkMode(!darkMode)}
         onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenWeeklyReview={() => setIsWeeklyReviewOpen(true)}
       />
 
       {/* Main Container: Home (Cosmos landing & library) vs Calendar (Schedule) */}
@@ -447,10 +569,11 @@ export default function App() {
                 onAddForDate={handleAddForDate}
                 onOpenDayDrawer={(dStr) => setDayDrawerDate(dStr)}
                 onDateChange={setCurrentDate}
-                onViewChange={setView}
+                onViewChange={handleViewChange}
                 inboxItems={inboxItems}
                 onApplyQuickPlan={handleApplyQuickPlan}
                 onOpenQuickPlan={handleOpenQuickPlan}
+                onOpenWeeklyReview={() => setIsWeeklyReviewOpen(true)}
               />
             </div>
           )}
@@ -535,6 +658,53 @@ export default function App() {
         totalItems={items.length}
       />
 
+      {/* Storage Full / Save Failure Safe Mode Alert Banner */}
+      {storageFailure && (
+        <div
+          role="alert"
+          className="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-[95%] max-w-2xl px-2 animate-in slide-in-from-top-4 duration-200"
+        >
+          <div className="flex items-center justify-between gap-3 p-3.5 rounded-2xl bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900 shadow-2xl border border-stone-800 dark:border-stone-200">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <AlertCircle className="w-5 h-5 text-amber-400 dark:text-amber-600 shrink-0" />
+              <div className="text-xs font-sans">
+                <span className="font-semibold block truncate">
+                  Saving to browser storage failed
+                </span>
+                <span className="text-stone-300 dark:text-stone-600 text-[11px] line-clamp-1">
+                  Data is safely kept in memory for this session. Export a backup now to prevent data loss.
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={handleExportBackup}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-sans font-semibold bg-amber-500 hover:bg-amber-400 text-stone-950 transition-colors cursor-pointer shadow-xs"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Export backup</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsSettingsOpen(true)}
+                className="px-2.5 py-1.5 rounded-full text-xs font-sans text-stone-300 hover:text-white dark:text-stone-600 dark:hover:text-stone-950 transition-colors cursor-pointer"
+              >
+                Settings
+              </button>
+              <button
+                type="button"
+                onClick={() => setStorageFailure(null)}
+                className="p-1 text-stone-400 hover:text-white dark:hover:text-black transition-colors cursor-pointer"
+                title="Dismiss"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Quick Plan Undo Floating Banner */}
       {quickPlanUndoState && (
         <div className="fixed bottom-6 right-6 z-50 flex items-center gap-3 bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900 px-4 py-3 rounded-2xl shadow-2xl border border-stone-800 dark:border-stone-200 animate-in slide-in-from-bottom-5 duration-200">
@@ -573,6 +743,26 @@ export default function App() {
         existingWeekItems={existingWeekItems}
         availableBudgetMinutes={quickPlanBudgetMinutes}
         dayThemes={dayThemes}
+        onNavigateNextWeek={() => {
+          setCurrentDate((prev) => {
+            const next = new Date(prev);
+            next.setDate(next.getDate() + 7);
+            return next;
+          });
+          setActiveTab('calendar');
+          setView('week');
+        }}
+      />
+
+      {/* Weekly Review Modal (Start-of-week factual totals & triage) */}
+      <WeeklyReviewModal
+        isOpen={isWeeklyReviewOpen}
+        onClose={() => setIsWeeklyReviewOpen(false)}
+        items={items}
+        currentDate={currentDate}
+        onUpdateItem={handleUpdateItem}
+        onDeleteItem={handleDeleteItem}
+        onPlanNextWeek={handlePlanNextWeekFromReview}
       />
     </div>
   );

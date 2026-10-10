@@ -3,8 +3,15 @@ import {
   DayTheme,
   PlanningStrategy,
   QuickPlanProposedItem,
+  QuickPlanNotScheduledItem,
   QuickPlanResult,
 } from '../types';
+import {
+  calculateTimeForDateSet,
+  getEstimatedDuration,
+  formatHoursMinutes,
+} from './timeAccounting';
+import { toDateStr } from './dateUtils';
 
 export interface WeekDaySlot {
   dateStr: string; // YYYY-MM-DD
@@ -22,214 +29,371 @@ export interface QuickPlanParams {
   availableBudgetMinutes: number;
   dayThemes?: DayTheme[];
   strategy?: PlanningStrategy;
+  todayDateStr?: string; // Explicit reference date for fixed-date deterministic testing
+  enableDayPreferences?: boolean; // Toggle for built-in media day preferences (Articles Mon/Tue, etc.)
 }
-
-import {
-  calculateTimeForDateSet,
-  getEstimatedDuration,
-} from './timeAccounting';
 
 export { getEstimatedDuration };
 
 /**
- * Deterministic & Explainable Weekly Quick Planning Algorithm
- * Zero AI / Zero Model Calls
+ * Deterministic Weekly Quick Planning Algorithm
+ * 1. Proposes ONLY days from today onward. If no days remain this week, flags noDaysRemainingThisWeek.
+ * 2. Compiles a 'Not scheduled' list with clear explanations (e.g. 'Too long for remaining budget: 3h book').
+ * 3. Never adds items when the week is already at or above 85% of the budget.
+ * 4. Tries combination improvements after first pass to get closer to 85% deterministically.
+ * 5. Default strategy: 'Priority, then oldest', duration only breaking ties. 'Shortest first' as an option.
+ * 6. Explanations clearly state why each specific day was chosen.
+ * 7. Safely handles empty week or empty inbox without crashing.
  */
 export function generateQuickPlan({
-  inboxItems,
-  existingWeekItems,
-  weekDays,
-  availableBudgetMinutes,
+  inboxItems = [],
+  existingWeekItems = [],
+  weekDays = [],
+  availableBudgetMinutes = 0,
   dayThemes = [],
-  strategy = 'thematic_balanced',
+  strategy = 'priority_oldest',
+  todayDateStr,
+  enableDayPreferences = true,
 }: QuickPlanParams): QuickPlanResult {
-  // 1. Calculate current planned time for this week using shared counting rule
-  // (Counts full duration once on start date, completed items count in PLANNED)
+  // Normalize strategy: 'thematic_balanced' and 'oldest_first' alias to 'priority_oldest'
+  const normalizedStrategy: PlanningStrategy =
+    strategy === 'shortest_first' ? 'shortest_first' : 'priority_oldest';
+
+  // 1. Safe handling for empty week
+  if (!weekDays || weekDays.length === 0) {
+    const candidates = (inboxItems || []).filter(
+      (item) => item.status === 'inbox' && !item.scheduledDate
+    );
+    return {
+      proposedItems: [],
+      notScheduledItems: candidates.map((item) => ({
+        item,
+        reason: 'Empty week: No calendar days available for scheduling',
+      })),
+      totalPlannedMinutes: 0,
+      initialScheduledMinutes: 0,
+      availableBudgetMinutes,
+      remainingMinutes: availableBudgetMinutes,
+      isOverBudget: false,
+      bufferPercentRemaining: 100,
+      strategyUsed: normalizedStrategy,
+      noDaysRemainingThisWeek: true,
+    };
+  }
+
+  // 2. Calculate current planned time for this week using shared counting rule
   const weekDatesSet = new Set(weekDays.map((w) => w.dateStr));
   const { plannedMinutes: initialScheduledMinutes } = calculateTimeForDateSet(
     existingWeekItems,
     weekDatesSet
   );
 
-  // 2. Budget capacity calculation:
-  // Default behavior aims to leave ~10-20% of total budget free when possible (target 85% of budget).
-  const targetTotalMinutes = Math.max(0, Math.round(availableBudgetMinutes * 0.85));
-  const capacityToFill = Math.max(0, targetTotalMinutes - initialScheduledMinutes);
+  // 3. Filter eligible days: ONLY propose days from today onward
+  const refTodayStr = todayDateStr || toDateStr(new Date());
+  const eligibleDays = weekDays.filter((wd) => wd.dateStr >= refTodayStr);
 
-  // 3. Filter eligible items: active inbox items not yet completed
-  const candidates = inboxItems.filter(
+  const candidates = (inboxItems || []).filter(
     (item) => item.status === 'inbox' && !item.scheduledDate
   );
 
-  // 4. Sort / score candidates deterministically based on strategy
-  const sortedCandidates = [...candidates];
-
-  switch (strategy) {
-    case 'oldest_first':
-      sortedCandidates.sort((a, b) => {
-        // Priority first, then oldest createdAt
-        if (a.isPriority && !b.isPriority) return -1;
-        if (!a.isPriority && b.isPriority) return 1;
-        const timeA = new Date(a.createdAt || 0).getTime();
-        const timeB = new Date(b.createdAt || 0).getTime();
-        return timeA - timeB;
-      });
-      break;
-
-    case 'shortest_first':
-      sortedCandidates.sort((a, b) => {
-        // Priority first, then shortest duration
-        if (a.isPriority && !b.isPriority) return -1;
-        if (!a.isPriority && b.isPriority) return 1;
-        return getEstimatedDuration(a) - getEstimatedDuration(b);
-      });
-      break;
-
-    case 'alternate_type': {
-      // Group by content type and interleave in round-robin
-      const groups: Record<string, ContentItem[]> = {};
-      sortedCandidates.forEach((item) => {
-        const type = item.contentType || 'other';
-        if (!groups[type]) groups[type] = [];
-        groups[type].push(item);
-      });
-      // Sort items within each group: priority first, then oldest
-      Object.values(groups).forEach((list) => {
-        list.sort((a, b) => {
-          if (a.isPriority && !b.isPriority) return -1;
-          if (!a.isPriority && b.isPriority) return 1;
-          return new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime();
-        });
-      });
-
-      const interleaved: ContentItem[] = [];
-      const types = Object.keys(groups);
-      let added = true;
-      let index = 0;
-      while (added) {
-        added = false;
-        for (const t of types) {
-          if (groups[t][index]) {
-            interleaved.push(groups[t][index]);
-            added = true;
-          }
-        }
-        index++;
-      }
-      sortedCandidates.splice(0, sortedCandidates.length, ...interleaved);
-      break;
-    }
-
-    case 'thematic_balanced':
-    default:
-      // Balanced: Starred priority items given first preference, then balance by duration & age
-      sortedCandidates.sort((a, b) => {
-        const scoreA = (a.isPriority ? 1000 : 0) - getEstimatedDuration(a) * 0.1;
-        const scoreB = (b.isPriority ? 1000 : 0) - getEstimatedDuration(b) * 0.1;
-        if (scoreA !== scoreB) return scoreB - scoreA;
-        return new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime();
-      });
-      break;
+  // Check if no days remain in this week
+  if (eligibleDays.length === 0) {
+    return {
+      proposedItems: [],
+      notScheduledItems: candidates.map((item) => ({
+        item,
+        reason: 'No days remain this week: All days have already passed',
+      })),
+      totalPlannedMinutes: initialScheduledMinutes,
+      initialScheduledMinutes,
+      availableBudgetMinutes,
+      remainingMinutes: Math.max(0, availableBudgetMinutes - initialScheduledMinutes),
+      isOverBudget: initialScheduledMinutes > availableBudgetMinutes,
+      bufferPercentRemaining:
+        availableBudgetMinutes > 0
+          ? Math.round(
+              (Math.max(0, availableBudgetMinutes - initialScheduledMinutes) /
+                availableBudgetMinutes) *
+                100
+            )
+          : 0,
+      strategyUsed: normalizedStrategy,
+      noDaysRemainingThisWeek: true,
+    };
   }
 
-  // 5. Select items fitting the capacity
+  // 4. Budget capacity calculations under strict 85% cap rule
+  // Rule 3: Never add items when the week is already above 85% of the budget.
+  const targetCapMinutes = Math.floor(availableBudgetMinutes * 0.85);
+
+  if (initialScheduledMinutes >= targetCapMinutes) {
+    return {
+      proposedItems: [],
+      notScheduledItems: candidates.map((item) => ({
+        item,
+        reason: `Week is already at or above 85% of the budget (${initialScheduledMinutes}m scheduled / ${targetCapMinutes}m 85% cap)`,
+      })),
+      totalPlannedMinutes: initialScheduledMinutes,
+      initialScheduledMinutes,
+      availableBudgetMinutes,
+      remainingMinutes: Math.max(0, availableBudgetMinutes - initialScheduledMinutes),
+      isOverBudget: initialScheduledMinutes > availableBudgetMinutes,
+      bufferPercentRemaining:
+        availableBudgetMinutes > 0
+          ? Math.round(
+              (Math.max(0, availableBudgetMinutes - initialScheduledMinutes) /
+                availableBudgetMinutes) *
+                100
+            )
+          : 0,
+      strategyUsed: normalizedStrategy,
+      noDaysRemainingThisWeek: false,
+    };
+  }
+
+  const availableCapacityUnder85 = Math.max(0, targetCapMinutes - initialScheduledMinutes);
+
+  // 5. Sort candidates deterministically based on strategy
+  // Rule 5: Default strategy 'Priority, then oldest', duration only breaking ties. 'Shortest first' as an option.
+  const sortedCandidates = [...candidates];
+
+  if (normalizedStrategy === 'shortest_first') {
+    sortedCandidates.sort((a, b) => {
+      // 1. Priority first
+      if (a.isPriority && !b.isPriority) return -1;
+      if (!a.isPriority && b.isPriority) return 1;
+      // 2. Shortest duration first
+      const durA = getEstimatedDuration(a);
+      const durB = getEstimatedDuration(b);
+      if (durA !== durB) return durA - durB;
+      // 3. Oldest first tie-breaker
+      const timeA = new Date(a.createdAt || 0).getTime();
+      const timeB = new Date(b.createdAt || 0).getTime();
+      return timeA - timeB;
+    });
+  } else {
+    // 'priority_oldest': Priority first, then oldest, duration only breaking ties
+    sortedCandidates.sort((a, b) => {
+      // 1. Priority first
+      if (a.isPriority && !b.isPriority) return -1;
+      if (!a.isPriority && b.isPriority) return 1;
+      // 2. Oldest first
+      const timeA = new Date(a.createdAt || 0).getTime();
+      const timeB = new Date(b.createdAt || 0).getTime();
+      if (timeA !== timeB) return timeA - timeB;
+      // 3. Duration ONLY breaking ties
+      const durA = getEstimatedDuration(a);
+      const durB = getEstimatedDuration(b);
+      return durA - durB;
+    });
+  }
+
+  // 6. First Pass: Greedy selection under 85% capacity
   const selectedItems: ContentItem[] = [];
   let plannedNewMinutes = 0;
 
   for (const item of sortedCandidates) {
-    const itemMins = getEstimatedDuration(item);
-    // If we have remaining capacity or if nothing is selected yet and it's within full budget
-    if (
-      plannedNewMinutes + itemMins <= capacityToFill ||
-      (selectedItems.length === 0 && initialScheduledMinutes + itemMins <= availableBudgetMinutes)
-    ) {
+    const dur = getEstimatedDuration(item);
+    if (plannedNewMinutes + dur <= availableCapacityUnder85) {
       selectedItems.push(item);
-      plannedNewMinutes += itemMins;
+      plannedNewMinutes += dur;
     }
   }
 
-  // 6. Map selected items to week days (grouping by category on thematic days)
-  // Track assigned minutes per day
+  // 7. Rule 4: After first pass, try to get closer to 85% with a better combination of remaining items
+  // Keep it strictly deterministic
+  const remainingCandidates = sortedCandidates.filter(
+    (item) => !selectedItems.some((s) => s.id === item.id)
+  );
+
+  // Attempt A: Check if any combinations of remaining candidates fit directly into remaining gap
+  let gap = availableCapacityUnder85 - plannedNewMinutes;
+  for (const rem of remainingCandidates) {
+    const dur = getEstimatedDuration(rem);
+    if (dur <= gap) {
+      selectedItems.push(rem);
+      plannedNewMinutes += dur;
+      gap -= dur;
+    }
+  }
+
+  // Attempt B: If still a gap, check deterministic 1-for-1 or 1-for-2 swaps from remaining items
+  // that strictly increase total planned duration without exceeding 85% cap.
+  gap = availableCapacityUnder85 - plannedNewMinutes;
+  if (gap > 0 && selectedItems.length > 0) {
+    const unpicked = sortedCandidates.filter(
+      (item) => !selectedItems.some((s) => s.id === item.id)
+    );
+
+    let bestSwap: {
+      removeIndex: number;
+      addItems: ContentItem[];
+      netGain: number;
+    } | null = null;
+
+    // Check replacing item s with single item r
+    for (let sIdx = selectedItems.length - 1; sIdx >= 0; sIdx--) {
+      const sItem = selectedItems[sIdx];
+      // Only consider swapping non-priority items or lower-priority items
+      const sDur = getEstimatedDuration(sItem);
+
+      for (let rIdx = 0; rIdx < unpicked.length; rIdx++) {
+        const rItem = unpicked[rIdx];
+        if (sItem.isPriority && !rItem.isPriority) continue; // Do not sacrifice priority item for non-priority
+
+        const rDur = getEstimatedDuration(rItem);
+        const gain = rDur - sDur;
+        if (gain > 0 && gain <= gap) {
+          if (!bestSwap || gain > bestSwap.netGain) {
+            bestSwap = { removeIndex: sIdx, addItems: [rItem], netGain: gain };
+          }
+        }
+      }
+
+      // Check replacing item s with a pair of items (r1, r2)
+      for (let i = 0; i < unpicked.length; i++) {
+        for (let j = i + 1; j < unpicked.length; j++) {
+          const r1 = unpicked[i];
+          const r2 = unpicked[j];
+          if (sItem.isPriority && !r1.isPriority && !r2.isPriority) continue;
+
+          const comboDur = getEstimatedDuration(r1) + getEstimatedDuration(r2);
+          const gain = comboDur - sDur;
+          if (gain > 0 && gain <= gap) {
+            if (!bestSwap || gain > bestSwap.netGain) {
+              bestSwap = { removeIndex: sIdx, addItems: [r1, r2], netGain: gain };
+            }
+          }
+        }
+      }
+    }
+
+    if (bestSwap) {
+      selectedItems.splice(bestSwap.removeIndex, 1, ...bestSwap.addItems);
+      plannedNewMinutes += bestSwap.netGain;
+    }
+  }
+
+  // 8. Build 'Not scheduled' list with clear, specific reasons (Rule 2)
+  const remainingGap = availableCapacityUnder85 - plannedNewMinutes;
+  const notScheduledItems: QuickPlanNotScheduledItem[] = [];
+
+  for (const item of sortedCandidates) {
+    if (!selectedItems.some((s) => s.id === item.id)) {
+      const dur = getEstimatedDuration(item);
+      let reason: string;
+
+      if (dur > availableCapacityUnder85) {
+        reason = `Too long for the budget: ${formatHoursMinutes(dur)} ${item.contentType} exceeds total 85% capacity (${formatHoursMinutes(availableCapacityUnder85)})`;
+      } else if (dur > remainingGap) {
+        reason = `Too long for the remaining budget: ${formatHoursMinutes(dur)} ${item.contentType} (needs ${dur}m, only ${remainingGap}m remaining under 85% cap)`;
+      } else {
+        reason = `Unscheduled: ${formatHoursMinutes(dur)} ${item.contentType} passed over for higher-priority items to hit 85% target`;
+      }
+
+      notScheduledItems.push({ item, reason });
+    }
+  }
+
+  // 9. Day Allocation: Map selected items to eligible days (Rule 1 & Rule 6)
+  // Track assigned loads per day
   const dayLoads: Record<string, number> = {};
-  weekDays.forEach((wd) => {
+  eligibleDays.forEach((wd) => {
     dayLoads[wd.dateStr] = wd.currentPlannedMinutes;
   });
 
   const proposedItems: QuickPlanProposedItem[] = [];
 
-  // Helper to test if a day theme matches an item
-  const getThematicAffinity = (item: ContentItem, slot: WeekDaySlot): number => {
+  // Helper scoring function that returns score and clear human reason
+  const getSlotScoreAndReason = (
+    item: ContentItem,
+    slot: WeekDaySlot
+  ): { score: number; whyDay: string } => {
     let score = 0;
-    const themeStr = (slot.themeTopic || '').toLowerCase();
-    const typeStr = item.contentType.toLowerCase();
-    const topicStr = (item.topic || '').toLowerCase();
+    const reasons: string[] = [];
 
-    if (themeStr) {
-      if (themeStr.includes(typeStr) || (typeStr === 'youtube' && themeStr.includes('video'))) {
+    // Check single-day week case
+    if (eligibleDays.length === 1) {
+      return {
+        score: 10,
+        whyDay: `Only remaining day this week from today (${slot.dayName})`,
+      };
+    }
+
+    // 1. Thematic topic match
+    const themeTopic = (slot.themeTopic || '').toLowerCase();
+    const itemTopic = (item.topic || '').toLowerCase();
+    if (themeTopic && itemTopic && themeTopic.includes(itemTopic)) {
+      score += 10;
+      reasons.push(`Thematic topic match (${slot.themeTopic})`);
+    }
+
+    // 2. Built-in media day preferences (if switch is enabled in settings)
+    if (enableDayPreferences) {
+      if (item.contentType === 'article' && [1, 2].includes(slot.dayOfWeek)) {
         score += 5;
-      }
-      if (topicStr && themeStr.includes(topicStr)) {
-        score += 8;
+        reasons.push(`Day preference: articles on ${slot.dayName}s`);
+      } else if (item.contentType === 'podcast' && [3, 4].includes(slot.dayOfWeek)) {
+        score += 5;
+        reasons.push(`Day preference: podcasts on ${slot.dayName}s`);
+      } else if (
+        (item.contentType === 'youtube' || item.contentType === 'documentary') &&
+        [5, 6, 0].includes(slot.dayOfWeek)
+      ) {
+        score += 5;
+        reasons.push(`Day preference: videos on ${slot.dayName}s`);
+      } else if (item.contentType === 'book' && [0, 6].includes(slot.dayOfWeek)) {
+        score += 5;
+        reasons.push(`Day preference: books on weekends`);
       }
     }
 
-    // Default media-friendly scheduling:
-    // Videos on Fri/Sat/Sun, Articles on Mon/Tue, Podcasts on Wed/Thu
-    if (item.contentType === 'youtube' && [5, 6, 0].includes(slot.dayOfWeek)) score += 2;
-    if (item.contentType === 'article' && [1, 2].includes(slot.dayOfWeek)) score += 2;
-    if (item.contentType === 'podcast' && [3, 4].includes(slot.dayOfWeek)) score += 2;
-    if (item.contentType === 'book' && [0, 6].includes(slot.dayOfWeek)) score += 2;
-
-    // Prefer days with less load
+    // 3. Load balance factor
     const currentLoad = dayLoads[slot.dateStr] || 0;
-    score -= currentLoad / 30; // Mild penalty for loaded days
+    score -= currentLoad / 20;
 
-    return score;
+    if (reasons.length === 0) {
+      if (currentLoad === 0) {
+        reasons.push(`Earliest open day (${slot.dayName}) with no scheduled load`);
+      } else {
+        reasons.push(`Selected ${slot.dayName} to balance schedule load (${currentLoad}m planned)`);
+      }
+    }
+
+    return { score, whyDay: reasons.join(' · ') };
   };
 
   selectedItems.forEach((item) => {
     const duration = getEstimatedDuration(item);
 
-    // Find the best week day for this item
-    let bestSlot = weekDays[0];
+    let bestSlot = eligibleDays[0];
     let bestScore = -Infinity;
+    let bestWhyDay = `Assigned to ${bestSlot.dayName}`;
 
-    weekDays.forEach((slot) => {
-      const affinity = getThematicAffinity(item, slot);
-      if (affinity > bestScore) {
-        bestScore = affinity;
+    eligibleDays.forEach((slot) => {
+      const { score, whyDay } = getSlotScoreAndReason(item, slot);
+      if (score > bestScore) {
+        bestScore = score;
         bestSlot = slot;
+        bestWhyDay = whyDay;
       }
     });
 
     // Update day load
     dayLoads[bestSlot.dateStr] = (dayLoads[bestSlot.dateStr] || 0) + duration;
 
-    // Build explainable tag
-    const reasons: string[] = [];
-    if (item.isPriority) {
-      reasons.push('★ High priority');
-    }
-    if (bestSlot.themeTopic) {
-      reasons.push(`Thematic match: ${bestSlot.themeTopic}`);
-    } else {
-      reasons.push(`Slotted to ${bestSlot.dayName}`);
-    }
-    reasons.push(`${duration}m duration`);
+    // Full explainable reason (Rule 6)
+    const extraDetails: string[] = [];
+    if (item.isPriority) extraDetails.push('★ Priority');
+    extraDetails.push(`${duration}m duration`);
 
-    if (strategy === 'oldest_first') {
-      reasons.push('Oldest backlog item');
-    } else if (strategy === 'shortest_first') {
-      reasons.push('Quick win session');
-    } else if (strategy === 'alternate_type') {
-      reasons.push(`Type rotation (${item.contentType})`);
-    }
+    const explanation = `${bestWhyDay} · ${extraDetails.join(' · ')}`;
 
     proposedItems.push({
       item,
       targetDateStr: bestSlot.dateStr,
       dayLabel: bestSlot.dayName,
-      explanation: reasons.join(' · '),
+      explanation,
       isSelected: true,
     });
   });
@@ -244,12 +408,14 @@ export function generateQuickPlan({
 
   return {
     proposedItems,
+    notScheduledItems,
     totalPlannedMinutes,
     initialScheduledMinutes,
     availableBudgetMinutes,
     remainingMinutes,
     isOverBudget,
     bufferPercentRemaining,
-    strategyUsed: strategy,
+    strategyUsed: normalizedStrategy,
+    noDaysRemainingThisWeek: false,
   };
 }

@@ -12,6 +12,7 @@ import {
 import { CalendarView, APP_NAME } from '../types';
 import { CurateLogo } from './CurateLogo';
 import { formatHoursMinutes } from '../lib/timeAccounting';
+import { getCustomBrandLogo, getCustomBrandName } from '../lib/brand';
 
 interface TopNavProps {
   activeTab: 'home' | 'calendar';
@@ -33,6 +34,7 @@ interface TopNavProps {
   darkMode: boolean;
   onToggleDarkMode: () => void;
   onOpenSettings?: () => void;
+  onOpenWeeklyReview?: () => void;
 }
 
 export const TopNav: React.FC<TopNavProps> = ({
@@ -55,7 +57,20 @@ export const TopNav: React.FC<TopNavProps> = ({
   darkMode,
   onToggleDarkMode,
   onOpenSettings,
+  onOpenWeeklyReview,
 }) => {
+  const [customLogo, setCustomLogo] = React.useState<string | null>(() => getCustomBrandLogo());
+  const [brandName, setBrandName] = React.useState<string>(() => getCustomBrandName());
+
+  React.useEffect(() => {
+    const handleBrandUpdate = () => {
+      setCustomLogo(getCustomBrandLogo());
+      setBrandName(getCustomBrandName());
+    };
+    window.addEventListener('curate:brand_updated', handleBrandUpdate);
+    return () => window.removeEventListener('curate:brand_updated', handleBrandUpdate);
+  }, []);
+
   const effectivePlanned = monthPlannedMinutes !== undefined ? monthPlannedMinutes : totalMonthlyMinutes;
   const effectiveCompleted = monthCompletedMinutes;
   const currentLabel = React.useMemo(() => {
@@ -92,14 +107,18 @@ export const TopNav: React.FC<TopNavProps> = ({
             type="button"
             onClick={() => onTabChange('home')}
             className="flex items-center gap-2.5 shrink-0 cursor-pointer group focus:outline-hidden"
-            title={APP_NAME}
-            aria-label={APP_NAME}
+            title={brandName}
+            aria-label={brandName}
           >
-            <div className="w-7 h-7 rounded-lg bg-black dark:bg-white text-white dark:text-black flex items-center justify-center shadow-2xs group-hover:scale-105 transition-transform p-1">
-              <CurateLogo className="w-full h-full text-current" />
+            <div className="w-7 h-7 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+              {customLogo ? (
+                <img src={customLogo} alt={brandName} className="w-full h-full object-contain" />
+              ) : (
+                <CurateLogo className="w-full h-full text-stone-900 dark:text-stone-100" />
+              )}
             </div>
             <span className="font-serif text-lg font-medium tracking-tight text-stone-900 dark:text-stone-100 select-none">
-              {APP_NAME}
+              {brandName}
             </span>
           </button>
 
@@ -156,6 +175,17 @@ export const TopNav: React.FC<TopNavProps> = ({
               >
                 Today
               </button>
+
+              {onOpenWeeklyReview && (
+                <button
+                  type="button"
+                  onClick={onOpenWeeklyReview}
+                  className="ml-1 text-[11px] font-sans text-stone-400 hover:text-stone-900 dark:hover:text-stone-200 transition-colors cursor-pointer hidden md:inline-block"
+                  title="Weekly Review (Previous-week totals & triage)"
+                >
+                  Review
+                </button>
+              )}
             </div>
 
             {/* Minimal Calendar Sub-View Switcher (Month / Week / Day) */}

@@ -1,8 +1,11 @@
 import { ContentItem, DayTheme, DEFAULT_TOPICS, BudgetPreset } from '../types';
 import { generateEditorialCoverSvg } from './metadataExtractor';
 import { getOffsetDateStr } from './dateUtils';
+import { saveMediaItem, saveMediaItemSync, MAX_MEDIA_BYTES } from './mediaStorage';
+import { trackEvent } from './analytics';
 
 export const CURRENT_SCHEMA_VERSION = 1;
+export const DEFAULT_STORAGE_QUOTA_BYTES = 5 * 1024 * 1024; // 5 MB standard localStorage quota
 
 const STORAGE_KEYS = {
   ITEMS: 'curatecal_items_v1',
@@ -11,6 +14,104 @@ const STORAGE_KEYS = {
   WEEK_BUDGET_PREFIX: 'curatecal_week_budget_',
   SCHEMA_VERSION: 'curatecal_schema_version_v1',
 };
+
+// In-memory data layer to guarantee zero data loss if browser storage fails
+let inMemoryItems: ContentItem[] | null = null;
+let inMemoryDayThemes: DayTheme[] | null = null;
+let inMemoryCustomTopics: string[] | null = null;
+const inMemoryWeekBudgets = new Map<string, { availableMinutes: number; preset: BudgetPreset }>();
+let inMemoryDayPreferencesEnabled: boolean | null = null;
+
+export interface StorageFailureInfo {
+  hasFailed: boolean;
+  errorMessage: string;
+  failedAt: string;
+  failedOperation: string;
+}
+
+let lastStorageFailure: StorageFailureInfo | null = null;
+
+// Simulation flags for full storage and quota invariant testing
+let simulatedFullStorage = false;
+let simulatedUsageBytes: number | null = null;
+
+export interface StorageUsageStats {
+  usedBytes: number;
+  quotaBytes: number;
+  percentage: number; // 0 - 100
+  isWarning: boolean; // >= 80%
+  formattedUsed: string;
+  formattedQuota: string;
+  itemCount: number;
+}
+
+export function getStorageFailureInfo(): StorageFailureInfo | null {
+  return lastStorageFailure;
+}
+
+export function clearStorageFailureInfo(): void {
+  lastStorageFailure = null;
+}
+
+export function setSimulateFullStorage(simulate: boolean): void {
+  simulatedFullStorage = simulate;
+}
+
+export function isSimulateFullStorage(): boolean {
+  return simulatedFullStorage;
+}
+
+export function setSimulateUsageBytes(bytes: number | null): void {
+  simulatedUsageBytes = bytes;
+}
+
+/**
+ * Calculates current browser storage usage percentage and warns at 80%.
+ */
+export function getStorageUsageStats(): StorageUsageStats {
+  let usedBytes = 0;
+  if (simulatedUsageBytes !== null) {
+    usedBytes = Math.max(0, simulatedUsageBytes);
+  } else {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key) {
+            const val = localStorage.getItem(key) || '';
+            // UTF-16 characters use 2 bytes per character
+            usedBytes += (key.length + val.length) * 2;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[Storage] Could not compute storage size:', err);
+    }
+  }
+
+  const quotaBytes = DEFAULT_STORAGE_QUOTA_BYTES;
+  const rawPct = (usedBytes / quotaBytes) * 100;
+  const percentage = Math.min(100, Math.max(0, Math.round(rawPct * 10) / 10));
+  const isWarning = percentage >= 80;
+
+  const formatBytes = (bytes: number): string => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  };
+
+  const currentCount = inMemoryItems !== null ? inMemoryItems.length : getStoredItems().length;
+
+  return {
+    usedBytes,
+    quotaBytes,
+    percentage,
+    isWarning,
+    formattedUsed: formatBytes(usedBytes),
+    formattedQuota: formatBytes(quotaBytes),
+    itemCount: currentCount,
+  };
+}
 
 /**
  * Normalizes and upgrades an individual raw item from older schema variations
@@ -122,6 +223,10 @@ export const DEFAULT_DAY_THEMES: DayTheme[] = [
 ];
 
 export function getStoredItems(): ContentItem[] {
+  // If in-memory cache is present, return it to preserve unsaved changes
+  if (inMemoryItems !== null) {
+    return inMemoryItems;
+  }
   try {
     // Run schema migration if version key is not current
     const storedVer = localStorage.getItem(STORAGE_KEYS.SCHEMA_VERSION);
@@ -130,29 +235,103 @@ export function getStoredItems(): ContentItem[] {
     }
 
     const raw = localStorage.getItem(STORAGE_KEYS.ITEMS);
-    if (!raw) return [];
+    if (!raw) {
+      inMemoryItems = [];
+      return [];
+    }
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.map(migrateItem) : [];
+    const items = Array.isArray(parsed) ? parsed.map(migrateItem) : [];
+    inMemoryItems = items;
+    return items;
   } catch (err) {
     console.error('Failed to load items from localStorage:', err);
-    return [];
+    return inMemoryItems || [];
   }
 }
 
-export function saveStoredItems(items: ContentItem[]): void {
-  try {
-    localStorage.setItem(STORAGE_KEYS.ITEMS, JSON.stringify(items));
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('curatecal:items_updated', { detail: items }));
+export function saveStoredItems(items: ContentItem[]): boolean {
+  // 1. Keep data in memory first so user edits are NEVER lost
+  inMemoryItems = items;
+
+  // 2. Stop storing screenshots as raw base64 in localStorage. Convert any raw base64
+  // into an idb:... reference and save to IndexedDB media store capped at 200 KB.
+  const sanitizedItems = items.map((it) => {
+    if (it.screenshots && it.screenshots.length > 0) {
+      let modified = false;
+      const sanitizedShots = it.screenshots.map((shot, idx) => {
+        if (typeof shot === 'string' && shot.startsWith('data:image/')) {
+          modified = true;
+          const shotRefId = `shot_${it.id}_${idx}_${Date.now()}`;
+          saveMediaItemSync(shotRefId, shot, MAX_MEDIA_BYTES);
+          return `idb:${shotRefId}`;
+        }
+        return shot;
+      });
+      return modified ? { ...it, screenshots: sanitizedShots } : it;
     }
-  } catch (err) {
-    console.error('Failed to save items to localStorage:', err);
+    return it;
+  });
+
+  // 3. Attempt to save to browser storage
+  try {
+    if (simulatedFullStorage) {
+      throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+    }
+
+    localStorage.setItem(STORAGE_KEYS.ITEMS, JSON.stringify(sanitizedItems));
+
+    // Clear previous failure if write succeeded
+    if (lastStorageFailure) {
+      lastStorageFailure = null;
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('curatecal:storage_recovered'));
+      }
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('curatecal:items_updated', { detail: sanitizedItems }));
+    }
+    return true;
+  } catch (err: any) {
+    // Never fail silently! Record failure and notify listeners
+    const errorMsg =
+      err?.name === 'QuotaExceededError' || err?.message?.includes('quota')
+        ? 'Browser storage is full (quota exceeded).'
+        : `Browser storage write failed: ${err?.message || 'Unknown error'}`;
+
+    console.error('[Storage] Saving to browser storage failed; data kept safely in memory:', err);
+
+    trackEvent('storage_save_failed');
+
+    lastStorageFailure = {
+      hasFailed: true,
+      errorMessage: errorMsg,
+      failedAt: new Date().toISOString(),
+      failedOperation: 'saveStoredItems',
+    };
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('curatecal:storage_error', {
+          detail: {
+            error: errorMsg,
+            operation: 'saveStoredItems',
+            items: sanitizedItems,
+          },
+        })
+      );
+    }
+    return false;
   }
 }
 
 export function clearStoredItems(): void {
+  inMemoryItems = [];
   try {
     localStorage.setItem(STORAGE_KEYS.ITEMS, JSON.stringify([]));
+    if (lastStorageFailure) {
+      lastStorageFailure = null;
+    }
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('curatecal:items_updated', { detail: [] }));
     }
@@ -162,35 +341,57 @@ export function clearStoredItems(): void {
 }
 
 export function getStoredDayThemes(): DayTheme[] {
+  if (inMemoryDayThemes !== null) {
+    return inMemoryDayThemes;
+  }
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.DAY_THEMES);
-    if (!raw) return DEFAULT_DAY_THEMES;
+    if (!raw) {
+      inMemoryDayThemes = DEFAULT_DAY_THEMES;
+      return DEFAULT_DAY_THEMES;
+    }
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : DEFAULT_DAY_THEMES;
+    const themes = Array.isArray(parsed) ? parsed : DEFAULT_DAY_THEMES;
+    inMemoryDayThemes = themes;
+    return themes;
   } catch {
+    inMemoryDayThemes = DEFAULT_DAY_THEMES;
     return DEFAULT_DAY_THEMES;
   }
 }
 
 export function saveStoredDayThemes(themes: DayTheme[]): void {
+  inMemoryDayThemes = themes;
   try {
+    if (simulatedFullStorage) {
+      throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+    }
     localStorage.setItem(STORAGE_KEYS.DAY_THEMES, JSON.stringify(themes));
   } catch (err) {
-    console.error('Failed to save day themes:', err);
+    console.warn('[Storage] Failed to save day themes (kept in memory):', err);
   }
 }
 
 export function getStoredCustomTopics(): string[] {
+  if (inMemoryCustomTopics !== null) {
+    return inMemoryCustomTopics;
+  }
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.CUSTOM_TOPICS);
-    if (!raw) return DEFAULT_TOPICS;
+    if (!raw) {
+      inMemoryCustomTopics = DEFAULT_TOPICS;
+      return DEFAULT_TOPICS;
+    }
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.length > 0) {
-      // Merge unique
-      return Array.from(new Set([...DEFAULT_TOPICS, ...parsed]));
+      const merged = Array.from(new Set([...DEFAULT_TOPICS, ...parsed]));
+      inMemoryCustomTopics = merged;
+      return merged;
     }
+    inMemoryCustomTopics = DEFAULT_TOPICS;
     return DEFAULT_TOPICS;
   } catch {
+    inMemoryCustomTopics = DEFAULT_TOPICS;
     return DEFAULT_TOPICS;
   }
 }
@@ -200,10 +401,14 @@ export function saveCustomTopic(newTopic: string): string[] {
   const trimmed = newTopic.trim();
   if (!trimmed || current.includes(trimmed)) return current;
   const updated = [...current, trimmed];
+  inMemoryCustomTopics = updated;
   try {
+    if (simulatedFullStorage) {
+      throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+    }
     localStorage.setItem(STORAGE_KEYS.CUSTOM_TOPICS, JSON.stringify(updated));
   } catch (err) {
-    console.error('Failed to save topic:', err);
+    console.warn('[Storage] Failed to save topic (kept in memory):', err);
   }
   return updated;
 }
@@ -528,11 +733,15 @@ export function importBackupJson(jsonString: string): boolean {
 export function getStoredWeekBudget(
   weekKey: string
 ): { availableMinutes: number; preset: BudgetPreset } {
+  if (inMemoryWeekBudgets.has(weekKey)) {
+    return inMemoryWeekBudgets.get(weekKey)!;
+  }
   try {
     const raw = localStorage.getItem(`${STORAGE_KEYS.WEEK_BUDGET_PREFIX}${weekKey}`);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (typeof parsed.availableMinutes === 'number') {
+        inMemoryWeekBudgets.set(weekKey, parsed);
         return parsed;
       }
     }
@@ -540,7 +749,9 @@ export function getStoredWeekBudget(
     console.warn('[Storage] Failed to read week budget:', err);
   }
   // Default to 3 hours (180 mins)
-  return { availableMinutes: 180, preset: '3h' };
+  const defaultBudget = { availableMinutes: 180, preset: '3h' as BudgetPreset };
+  inMemoryWeekBudgets.set(weekKey, defaultBudget);
+  return defaultBudget;
 }
 
 export function saveStoredWeekBudget(
@@ -548,10 +759,15 @@ export function saveStoredWeekBudget(
   availableMinutes: number,
   preset: BudgetPreset
 ): void {
+  const payload = { availableMinutes, preset };
+  inMemoryWeekBudgets.set(weekKey, payload);
   try {
+    if (simulatedFullStorage) {
+      throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+    }
     localStorage.setItem(
       `${STORAGE_KEYS.WEEK_BUDGET_PREFIX}${weekKey}`,
-      JSON.stringify({ availableMinutes, preset })
+      JSON.stringify(payload)
     );
     if (typeof window !== 'undefined') {
       window.dispatchEvent(
@@ -561,7 +777,54 @@ export function saveStoredWeekBudget(
       );
     }
   } catch (err) {
-    console.warn('[Storage] Failed to save week budget:', err);
+    console.warn('[Storage] Failed to save week budget (kept in memory):', err);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('curatecal:budget_updated', {
+          detail: { weekKey, availableMinutes, preset },
+        })
+      );
+    }
+  }
+}
+
+export function getStoredDayPreferencesEnabled(): boolean {
+  if (inMemoryDayPreferencesEnabled !== null) {
+    return inMemoryDayPreferencesEnabled;
+  }
+  try {
+    const raw = localStorage.getItem('curatecal_day_preferences_enabled_v1');
+    if (raw !== null) {
+      const parsed = raw === 'true';
+      inMemoryDayPreferencesEnabled = parsed;
+      return parsed;
+    }
+  } catch (err) {
+    console.warn('[Storage] Failed to read day preferences enabled:', err);
+  }
+  inMemoryDayPreferencesEnabled = true;
+  return true; // Default enabled
+}
+
+export function saveStoredDayPreferencesEnabled(enabled: boolean): void {
+  inMemoryDayPreferencesEnabled = enabled;
+  try {
+    if (simulatedFullStorage) {
+      throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+    }
+    localStorage.setItem('curatecal_day_preferences_enabled_v1', String(enabled));
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('curatecal:day_preferences_updated', { detail: enabled })
+      );
+    }
+  } catch (err) {
+    console.warn('[Storage] Failed to save day preferences enabled (kept in memory):', err);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('curatecal:day_preferences_updated', { detail: enabled })
+      );
+    }
   }
 }
 

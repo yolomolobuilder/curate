@@ -53,9 +53,10 @@ export const BUDGET_PRESET_MINUTES: Record<Exclude<BudgetPreset, 'custom'>, numb
 };
 
 export type PlanningStrategy =
+  | 'priority_oldest'
+  | 'shortest_first'
   | 'thematic_balanced'
   | 'oldest_first'
-  | 'shortest_first'
   | 'alternate_type';
 
 export interface QuickPlanProposedItem {
@@ -66,8 +67,14 @@ export interface QuickPlanProposedItem {
   isSelected: boolean;
 }
 
+export interface QuickPlanNotScheduledItem {
+  item: ContentItem;
+  reason: string;
+}
+
 export interface QuickPlanResult {
   proposedItems: QuickPlanProposedItem[];
+  notScheduledItems: QuickPlanNotScheduledItem[];
   totalPlannedMinutes: number;
   initialScheduledMinutes: number;
   availableBudgetMinutes: number;
@@ -75,6 +82,7 @@ export interface QuickPlanResult {
   isOverBudget: boolean;
   bufferPercentRemaining: number;
   strategyUsed: PlanningStrategy;
+  noDaysRemainingThisWeek?: boolean;
 }
 
 export function getItemSource(item: { source?: string; author?: string; platform?: string }): string {

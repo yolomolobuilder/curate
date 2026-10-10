@@ -1,4 +1,4 @@
-import { trackEvent } from './analytics';
+import { trackEvent, getSecondsSinceOpen } from './analytics';
 
 export interface ActivationState {
   startedAt: string;
@@ -110,10 +110,13 @@ function checkMilestoneCompletion(state: ActivationState): ActivationState {
     );
 
     trackEvent('activation_milestone_completed', {
-      target: '3 saved -> 1 scheduled -> calendar viewed',
       durationSeconds,
       itemsSavedCount: state.itemsSavedCount,
       choice: state.choice,
+    });
+
+    trackEvent('activation_milestone', {
+      seconds_since_open: getSecondsSinceOpen(),
     });
   }
   return state;
@@ -163,7 +166,6 @@ export function recordActivationSave(
     savedCount: count,
     targetCount: 3,
     progress: progressText,
-    itemTitle,
     contentType,
   });
 
@@ -179,7 +181,6 @@ export function recordActivationSave(
     if (!state.hasOfferedPlanWeek) {
       state.hasOfferedPlanWeek = true;
       trackEvent('activation_offer_presented', {
-        offer: 'Your week is ready to plan.',
         totalSaved: count,
       });
     }
@@ -209,7 +210,6 @@ export function recordActivationScheduled(
     trackEvent('activation_item_scheduled', {
       itemId,
       date,
-      title,
       itemsSavedCount: state.itemsSavedCount,
     });
     saveActivationState(checkMilestoneCompletion(state));

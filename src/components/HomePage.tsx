@@ -584,8 +584,8 @@ export const HomePage: React.FC<HomePageProps> = ({
         />
 
         <div className="relative z-10 w-full max-w-xl text-center py-12 px-4">
-          <div className="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-white text-black p-2 shadow-md mb-4 mx-auto">
-            <CurateLogo className="w-full h-full text-black" />
+          <div className="inline-flex items-center justify-center w-12 h-12 mb-4 mx-auto">
+            <CurateLogo className="w-full h-full text-stone-200" />
           </div>
 
           <span className="block text-[10px] sm:text-[11px] font-mono uppercase tracking-[0.25em] text-stone-400 mb-3">

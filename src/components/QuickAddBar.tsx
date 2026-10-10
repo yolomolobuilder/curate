@@ -6,7 +6,7 @@ import { getTodayStr } from '../lib/dateUtils';
 import { formatDuration } from '../lib/timeAccounting';
 
 interface QuickAddBarProps {
-  onAddItem: (item: Omit<ContentItem, 'id' | 'createdAt'>) => void;
+  onAddItem: (item: Omit<ContentItem, 'id' | 'createdAt'>, method?: 'paste' | 'quick_add' | 'sample') => void;
   onOpenFullModal: () => void;
 }
 
@@ -69,7 +69,7 @@ export const QuickAddBar: React.FC<QuickAddBarProps> = ({
       durationMinutes: previewItem.durationMinutes,
       topic: previewItem.topic,
       status: 'inbox',
-    });
+    }, 'quick_add');
     handleClear();
   };
 
@@ -87,7 +87,7 @@ export const QuickAddBar: React.FC<QuickAddBarProps> = ({
       topic: previewItem.topic,
       status: 'planned',
       scheduledDate: todayStr,
-    });
+    }, 'quick_add');
     handleClear();
   };
 
