@@ -17,7 +17,10 @@ import {
   Copy,
   Youtube,
   RefreshCw,
+  Info,
+  Settings as SettingsIcon,
 } from 'lucide-react';
+import { APP_VERSION, BUILD_DATE_STRING } from '../lib/buildInfo';
 import {
   refreshAllEstimatedYouTubeItems,
   getYouTubeApiKey,
@@ -90,6 +93,8 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
   const [analyticsOff, setAnalyticsOff] = useState(() => isAnalyticsDisabled());
   const [copiedLog, setCopiedLog] = useState(false);
   const [logCount, setLogCount] = useState(() => getStoredAnalyticsEvents().length);
+  const [isRefreshingYouTube, setIsRefreshingYouTube] = useState(false);
+  const [refreshYouTubeStatus, setRefreshYouTubeStatus] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -152,9 +157,6 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
     const res = await runSelfCheckTests();
     setSelfCheckResult(res);
   };
-
-  const [isRefreshingYouTube, setIsRefreshingYouTube] = useState(false);
-  const [refreshYouTubeStatus, setRefreshYouTubeStatus] = useState<string | null>(null);
 
   const handleRefreshYouTubeDurations = async () => {
     setIsRefreshingYouTube(true);
@@ -260,9 +262,9 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-stone-200 dark:border-stone-800 shrink-0">
           <div className="flex items-center gap-2">
-            <Database className="w-4 h-4 text-stone-600 dark:text-stone-300" />
+            <SettingsIcon className="w-4 h-4 text-stone-600 dark:text-stone-300" />
             <h3 className="font-serif text-lg font-semibold text-stone-900 dark:text-stone-100">
-              Data & Storage
+              Settings
             </h3>
           </div>
           <button
@@ -782,6 +784,17 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
                 </p>
               </div>
             </button>
+
+            {/* About Curate (Requirement 3: Settings > About) */}
+            <div className="p-3.5 rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 space-y-1 text-center">
+              <div className="flex items-center justify-center gap-1.5 text-stone-900 dark:text-stone-100 font-serif text-xs font-semibold">
+                <Info className="w-3.5 h-3.5 text-stone-500" />
+                <span>About</span>
+              </div>
+              <p className="text-[11px] font-mono text-stone-600 dark:text-stone-400">
+                Version {APP_VERSION} · built {BUILD_DATE_STRING}
+              </p>
+            </div>
           </div>
         </div>
       </div>

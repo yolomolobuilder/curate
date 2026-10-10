@@ -1,7 +1,7 @@
 {
-  "name": "CurateCal — Visual Content Consumption Planner",
-  "description": "A visual-first personal media and learning planner. Organize YouTube videos, podcasts, articles, books, and courses onto an editorial calendar with thumbnails and drag-and-drop scheduling.",
+  "name": "Curate — Curate Your Curiosity.",
+  "description": "Curate turns the videos, articles, podcasts and books you save into a realistic weekly plan. Discover more, scroll less, and make time for what you love.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": []
 }
 

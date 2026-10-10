@@ -1,4 +1,5 @@
 export const APP_NAME = 'Curate';
+export const PRODUCT_TITLE = 'Curate — Curate Your Curiosity.';
 
 export type ContentType =
   | 'youtube'

@@ -37,7 +37,7 @@ import {
   enrichItemWithYouTubeDuration,
   isDurationUserEdited,
 } from './lib/youtubeDuration';
-import { RotateCcw, X, AlertCircle, Download } from 'lucide-react';
+import { RotateCcw, X, AlertCircle, Download, Laptop } from 'lucide-react';
 import { calculateTimeForMonth, calculateTimeForDate } from './lib/timeAccounting';
 import { toDateStr, getOffsetDateStr, getTodayStr, getWeekDates } from './lib/dateUtils';
 import { QuickPlanModal } from './components/QuickPlanModal';
@@ -51,6 +51,7 @@ export default function App() {
 
   // App opened event: fires exactly once on startup
   useEffect(() => {
+    document.title = 'Curate — Curate Your Curiosity.';
     trackEvent('app_opened');
   }, []);
 
@@ -69,11 +70,17 @@ export default function App() {
     trackEvent('calendar_viewed', { view: newView });
   };
 
-  // Dark mode
+  // Dark mode (default to dark mode on first launch when no saved preference exists)
   const [darkMode, setDarkMode] = useState<boolean>(() => {
-    const saved = localStorage.getItem('curatecal_dark_mode');
-    if (saved !== null) return saved === 'true';
-    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const saved = localStorage.getItem('curatecal_dark_mode');
+        if (saved !== null) return saved === 'true';
+      }
+    } catch {
+      // Ignore
+    }
+    return true;
   });
 
   // Inbox side shelf state
@@ -87,6 +94,45 @@ export default function App() {
   const [addModalInitialDate, setAddModalInitialDate] = useState<string | undefined>(undefined);
   const [addModalInitialType, setAddModalInitialType] = useState<ContentType | undefined>(undefined);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
+  // Desktop notice for viewports below 900px
+  const [isDesktopNoticeDismissed, setIsDesktopNoticeDismissed] = useState<boolean>(() => {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        return localStorage.getItem('curate_desktop_notice_dismissed') === 'true';
+      }
+    } catch {
+      // Ignore
+    }
+    return false;
+  });
+
+  const [isBelow900, setIsBelow900] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return window.innerWidth < 900;
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleResize = () => {
+      setIsBelow900(window.innerWidth < 900);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const handleDismissDesktopNotice = () => {
+    setIsDesktopNoticeDismissed(true);
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('curate_desktop_notice_dismissed', 'true');
+      }
+    } catch {
+      // Ignore
+    }
+  };
 
   // Quick Plan Modal state & preset budget
   const [isQuickPlanOpen, setIsQuickPlanOpen] = useState(false);
@@ -625,6 +671,31 @@ export default function App() {
     <div className={`min-h-screen bg-[#FAF9F6] dark:bg-[#0C0C0C] text-stone-900 dark:text-stone-100 flex flex-col font-sans transition-colors selection:bg-stone-200 dark:selection:bg-stone-800 ${
       darkMode ? 'dark' : ''
     }`}>
+      {/* Below 900px Desktop Notice Banner */}
+      {!isDesktopNoticeDismissed && isBelow900 && (
+        <aside
+          role="note"
+          aria-label="Desktop notice"
+          className="bg-amber-50/90 dark:bg-stone-900 border-b border-amber-200/70 dark:border-stone-850 text-stone-800 dark:text-stone-200 px-4 py-2 text-xs font-sans flex items-center justify-between gap-3 shrink-0"
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <Laptop className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+            <span className="leading-snug">
+              Curate is built for desktop right now. Open it on a laptop for the full experience.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={handleDismissDesktopNotice}
+            title="Dismiss notice"
+            aria-label="Dismiss notice"
+            className="p-1 rounded-md text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:bg-amber-100/70 dark:hover:bg-stone-800 transition-colors shrink-0 cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </aside>
+      )}
+
       {/* Cosmos-Style Minimal Header */}
       <TopNav
         activeTab={activeTab}

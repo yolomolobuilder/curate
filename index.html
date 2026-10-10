@@ -3,13 +3,23 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Curate — Visual Planner for Videos, Articles, Podcasts & Books</title>
-    <meta name="description" content="A visual planner for videos, articles, podcasts and books. Dark editorial design, jewel-tone cards, and drag-and-drop scheduling." />
-    <meta property="og:title" content="Curate — Visual Planner for Videos, Articles, Podcasts & Books" />
-    <meta property="og:description" content="A visual planner for videos, articles, podcasts and books. Dark editorial design, jewel-tone cards, and drag-and-drop scheduling." />
+    <title>Curate — Curate Your Curiosity.</title>
+    <meta name="description" content="Curate turns the videos, articles, podcasts and books you save into a realistic weekly plan. Discover more, scroll less, and make time for what you love." />
+    <meta property="og:title" content="Curate — Curate Your Curiosity." />
+    <meta property="og:description" content="Curate turns the videos, articles, podcasts and books you save into a realistic weekly plan. Discover more, scroll less, and make time for what you love." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Curate — Curate Your Curiosity." />
+    <meta name="twitter:description" content="Curate turns the videos, articles, podcasts and books you save into a realistic weekly plan. Discover more, scroll less, and make time for what you love." />
     <link rel="icon" type="image/svg+xml" href="/logo.svg" />
+    <!-- Microsoft Clarity -->
+    <script type="text/javascript">
+      (function(c,l,a,r,i,t,y){
+        c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+        t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+        y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+      })(window, document, "clarity", "script", "yvg0r639gg");
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -17,8 +27,8 @@
       (function() {
         try {
           var saved = localStorage.getItem('curatecal_dark_mode');
-          var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-          if (saved === 'true' || (saved === null && prefersDark)) {
+          var isDark = saved !== null ? saved === 'true' : true;
+          if (isDark) {
             document.documentElement.classList.add('dark');
             document.documentElement.setAttribute('data-theme', 'dark');
           } else {

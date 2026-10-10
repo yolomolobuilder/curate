@@ -257,15 +257,14 @@ export const TopNav: React.FC<TopNavProps> = ({
             <span>Add</span>
           </button>
 
-          {/* Visible Note: Guest Mode Browser-only Chip */}
-          <button
-            onClick={onOpenSettings}
-            title="Guest Mode: All data lives strictly in this browser. Click to manage backups."
-            className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-sans text-stone-500 hover:text-stone-900 dark:text-stone-400 dark:hover:text-stone-100 bg-stone-100 dark:bg-stone-850 hover:bg-stone-200/70 dark:hover:bg-stone-800 transition-colors cursor-pointer border border-stone-200/60 dark:border-stone-800"
+          {/* Visible Note: Guest Mode Browser-only Badge */}
+          <div
+            title="Guest Mode: All data lives strictly in this browser."
+            className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-sans text-stone-500 bg-stone-100 border border-stone-200/60 dark:text-stone-100 dark:bg-black dark:border-stone-800 select-none cursor-default"
           >
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
             <span>Guest · Browser Only</span>
-          </button>
+          </div>
 
           {/* Theme toggle */}
           <button
