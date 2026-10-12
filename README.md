@@ -102,3 +102,17 @@ Curate adheres strictly to a **no-AI rule**:
 ## Configuration & Optional Keys
 
 - **`VITE_YOUTUBE_API_KEY`** *(optional)*: To fetch real durations for YouTube links via the YouTube Data API v3, create a restricted key and set `VITE_YOUTUBE_API_KEY` in your environment. If no key is set, Curate gracefully uses heuristic duration estimates.
+
+### Unit and E2E Testing
+
+In addition to the invariant tests, we use Vitest and Playwright.
+
+**Run Unit Tests (Vitest)**
+```bash
+npm run test:unit
+```
+
+**Run End-to-End Tests (Playwright)**
+```bash
+npm run test:e2e
+```

@@ -1,11 +1,10 @@
 import { test, expect } from '@playwright/test';
 
 test.describe('Curate Smoke Tests', () => {
-  // Let's first make sure we can get past the activation screen by injecting the local storage variables
   test.beforeEach(async ({ page }) => {
-    // Navigate to a blank page first to set localStorage on the origin
     await page.goto('/');
 
+    // We must pass the correct storage key based on earlier checks ('curatecal_items_v1')
     await page.evaluate(() => {
       localStorage.setItem('curatecal_first_activation_completed_v1', 'true');
     });
@@ -13,16 +12,29 @@ test.describe('Curate Smoke Tests', () => {
     await page.reload();
   });
 
-  test('Canvas drag smoke test', async ({ page }) => {
+  test('Canvas drag smoke test (verify position changes)', async ({ page }) => {
+    await page.evaluate(() => {
+      localStorage.setItem('curatecal_items_v1', JSON.stringify([{
+        id: 'test-item-canvas',
+        title: 'Canvas Item',
+        thumbnailUrl: '',
+        contentType: 'youtube',
+        status: 'inbox',
+        createdAt: new Date().toISOString()
+      }]));
+    });
+    await page.reload();
+
     const canvasButton = page.locator('button', { hasText: 'Home' }).first();
     await expect(canvasButton).toBeVisible();
     await canvasButton.click();
 
-    // Verify canvas is visible
     await expect(page.locator('h1').filter({ hasText: 'Everything worth exploring' })).toBeVisible();
 
     const canvas = page.locator('.cursor-grab').first();
     await expect(canvas).toBeVisible();
+
+    const initialStyle = await canvas.getAttribute('style');
 
     const box = await canvas.boundingBox();
     if (box) {
@@ -31,20 +43,14 @@ test.describe('Curate Smoke Tests', () => {
       await page.mouse.move(box.x + box.width / 2 - 100, box.y + box.height / 2 - 100, { steps: 5 });
       await page.mouse.up();
     }
+
+    const finalStyle = await canvas.getAttribute('style');
+    expect(finalStyle).not.toBe(initialStyle);
   });
 
-  test('Calendar view smoke test', async ({ page }) => {
-    const calendarTab = page.locator('button', { hasText: 'Calendar' });
-    await expect(calendarTab).toBeVisible();
-    await calendarTab.click();
-
-    await expect(page.locator('text=Mon').first()).toBeVisible();
-  });
-
-  test('Calendar drag smoke test', async ({ page }) => {
-    // Create an item to drag
+  test('Calendar drag smoke test (verify item moves to day slot)', async ({ page }) => {
     await page.evaluate(() => {
-      localStorage.setItem('curate_items', JSON.stringify([{
+      localStorage.setItem('curatecal_items_v1', JSON.stringify([{
         id: 'test-item-1',
         title: 'Test Video',
         thumbnailUrl: '',
@@ -59,18 +65,26 @@ test.describe('Curate Smoke Tests', () => {
     await expect(calendarTab).toBeVisible();
     await calendarTab.click();
 
-    // Verify inbox is open and has our item
-    // Note: the test failed because there is no 'curatecal_items_v1' key (the code uses getStoredItems from storage.ts, which checks 'curate_items' and parses it)
-    const inboxItem = page.locator('text=Test Video');
-    if (await inboxItem.isVisible()) {
-        const box = await inboxItem.boundingBox();
-        if (box) {
-          await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-          await page.mouse.down();
-          await page.mouse.move(box.x - 200, box.y, { steps: 5 });
-          await page.mouse.up();
+    // Inbox might need to be opened manually if not open
+    const inboxBtn = page.locator('button', { hasText: 'Inbox' }).first();
+    if (await inboxBtn.isVisible()) {
+        const isSelected = await inboxBtn.getAttribute('class');
+        if (!isSelected?.includes('font-medium')) {
+            await inboxBtn.click();
         }
     }
+
+    const inboxItem = page.locator('text=Test Video').first();
+    await expect(inboxItem).toBeVisible();
+
+    // Use an explicit XPath query to find the droppable cell. In month view it's the 140px min height block.
+    const daySlot = page.locator('div.min-h-\\[140px\\]').first();
+    await expect(daySlot).toBeVisible();
+
+    await inboxItem.dragTo(daySlot);
+
+    const itemInGrid = daySlot.locator('text=Test Video').first();
+    await expect(itemInGrid).toBeVisible();
   });
 
   test('Quick plan smoke test', async ({ page }) => {
@@ -78,8 +92,7 @@ test.describe('Curate Smoke Tests', () => {
     await expect(calendarTab).toBeVisible();
     await calendarTab.click();
 
-    // The button has a title property
-    const planButton = page.locator('button[title="Quick Plan (2h preset)"]');
+    const planButton = page.locator('button', { hasText: 'Plan 2h' }).first();
     if (await planButton.isVisible()) {
         await planButton.click();
         const modalHeading = page.locator('h2', { hasText: 'Quick Plan' });
@@ -91,34 +104,39 @@ test.describe('Curate Smoke Tests', () => {
   });
 
   test('Position persistence smoke test', async ({ page }) => {
-    // Navigate to local dev server and set initial state
     await page.goto('/');
 
     await page.evaluate(() => {
         localStorage.setItem('curatecal_first_activation_completed_v1', 'true');
-        localStorage.setItem('curate_items', JSON.stringify([{
+        localStorage.setItem('curatecal_items_v1', JSON.stringify([{
             id: 'test-item-2',
-            title: 'Test Position',
+            title: 'Test Position Persistence',
             thumbnailUrl: '',
             contentType: 'article',
-            status: 'planned',
-            spatialX: 100,
-            spatialY: 100,
+            status: 'inbox',
             createdAt: new Date().toISOString()
         }]));
     });
 
     await page.reload();
 
-    // Check canvas view
     const canvasButton = page.locator('button', { hasText: 'Home' }).first();
     await expect(canvasButton).toBeVisible();
     await canvasButton.click();
 
-    // Verify item is visible
-    const testItem = page.locator('text=Test Position').first();
-    if (await testItem.isVisible()) {
-        await expect(testItem).toBeVisible();
-    }
+    const testItem = page.locator('h4', { hasText: 'Test Position Persistence' }).first();
+    await expect(testItem).toBeVisible();
+
+    const cardContainer = testItem.locator('xpath=ancestor::div[contains(@class, "absolute")]').first();
+    const initialStyle = await cardContainer.getAttribute('style');
+
+    await page.reload();
+
+    const testItemReloaded = page.locator('h4', { hasText: 'Test Position Persistence' }).first();
+    await expect(testItemReloaded).toBeVisible();
+    const cardContainerReloaded = testItemReloaded.locator('xpath=ancestor::div[contains(@class, "absolute")]').first();
+    const reloadedStyle = await cardContainerReloaded.getAttribute('style');
+
+    expect(reloadedStyle).toBe(initialStyle);
   });
 });
