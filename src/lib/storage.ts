@@ -213,6 +213,12 @@ export function migrateItem(raw: any): ContentItem {
     spatialX: typeof raw?.spatialX === 'number' ? raw.spatialX : undefined,
     spatialY: typeof raw?.spatialY === 'number' ? raw.spatialY : undefined,
     createdAt: typeof raw?.createdAt === 'string' ? raw.createdAt : new Date().toISOString(),
+    updatedAt:
+      typeof raw?.updatedAt === 'string' && raw.updatedAt.trim().length > 0
+        ? raw.updatedAt
+        : typeof raw?.createdAt === 'string' && raw.createdAt.trim().length > 0
+        ? raw.createdAt
+        : new Date().toISOString(),
     completedAt: typeof raw?.completedAt === 'string' ? raw.completedAt : undefined,
     isPriority: Boolean(raw?.isPriority),
     isSample: Boolean(raw?.isSample),
@@ -307,12 +313,21 @@ export function saveStoredItems(items: ContentItem[]): boolean {
   // 1. Keep data in memory first so user edits are NEVER lost
   inMemoryItems = items;
 
-  // 2. Stop storing screenshots as raw base64 in localStorage. Convert any raw base64
-  // into an idb:... reference and save to IndexedDB media store capped at 200 KB.
+  // 2. Stop storing screenshots or custom thumbnails as raw base64 in localStorage.
+  // Convert any raw base64 into an idb:... reference and save to IndexedDB media store capped at 200 KB.
   const sanitizedItems = items.map((it) => {
+    let modified = false;
+    let nextThumb = it.thumbnailUrl;
+    if (typeof nextThumb === 'string' && nextThumb.startsWith('data:image/')) {
+      const thumbRefId = `thumb_${it.id}_${Date.now()}`;
+      saveMediaItemSync(thumbRefId, nextThumb, MAX_MEDIA_BYTES);
+      nextThumb = `idb:${thumbRefId}`;
+      modified = true;
+    }
+
+    let sanitizedShots = it.screenshots;
     if (it.screenshots && it.screenshots.length > 0) {
-      let modified = false;
-      const sanitizedShots = it.screenshots.map((shot, idx) => {
+      sanitizedShots = it.screenshots.map((shot, idx) => {
         if (typeof shot === 'string' && shot.startsWith('data:image/')) {
           modified = true;
           const shotRefId = `shot_${it.id}_${idx}_${Date.now()}`;
@@ -321,9 +336,11 @@ export function saveStoredItems(items: ContentItem[]): boolean {
         }
         return shot;
       });
-      return modified ? { ...it, screenshots: sanitizedShots } : it;
     }
-    return it;
+
+    return modified
+      ? { ...it, thumbnailUrl: nextThumb, screenshots: sanitizedShots }
+      : it;
   });
 
   // 3. Attempt to save to browser storage
@@ -347,13 +364,45 @@ export function saveStoredItems(items: ContentItem[]): boolean {
     }
     return true;
   } catch (err: any) {
+    // If quota exceeded and not in test simulation, perform emergency cache cleanup and retry write
+    if (!simulatedFullStorage && (err?.name === 'QuotaExceededError' || err?.message?.includes('quota'))) {
+      try {
+        if (typeof localStorage !== 'undefined') {
+          // Clear ephemeral YouTube duration cache
+          localStorage.removeItem('curate.youtube_durations.cache');
+          // Prune diagnostic telemetry session log down to 20 recent events
+          const rawEvts = localStorage.getItem('curate_analytics_events_v1');
+          if (rawEvts) {
+            const evts = JSON.parse(rawEvts);
+            if (Array.isArray(evts) && evts.length > 20) {
+              localStorage.setItem('curate_analytics_events_v1', JSON.stringify(evts.slice(0, 20)));
+            }
+          }
+          // Retry write
+          localStorage.setItem(STORAGE_KEYS.ITEMS, JSON.stringify(sanitizedItems));
+          if (lastStorageFailure) {
+            lastStorageFailure = null;
+            if (typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('curatecal:storage_recovered'));
+            }
+          }
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('curatecal:items_updated', { detail: sanitizedItems }));
+          }
+          return true;
+        }
+      } catch {
+        // Recovery failed; proceed to safe fallback
+      }
+    }
+
     // Never fail silently! Record failure and notify listeners
     const errorMsg =
       err?.name === 'QuotaExceededError' || err?.message?.includes('quota')
         ? 'Browser storage is full (quota exceeded).'
         : `Browser storage write failed: ${err?.message || 'Unknown error'}`;
 
-    console.error('[Storage] Saving to browser storage failed; data kept safely in memory:', err);
+    console.warn('[Storage] Saving to browser storage failed; data kept safely in memory:', errorMsg);
 
     trackEvent('storage_save_failed');
 

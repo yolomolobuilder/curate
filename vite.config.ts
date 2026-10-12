@@ -8,10 +8,11 @@ export default defineConfig(() => {
     plugins: [react(), tailwindcss()],
     define: {
       __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+      __ENABLE_CLARITY__: JSON.stringify(process.env.ENABLE_CLARITY === 'true'),
     },
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(import.meta.dirname, '.'),
       },
     },
     server: {

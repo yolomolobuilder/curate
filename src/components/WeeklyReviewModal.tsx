@@ -346,7 +346,7 @@ export const WeeklyReviewModal: React.FC<WeeklyReviewModalProps> = ({
                     >
                       <div className="flex items-center gap-2.5 min-w-0">
                         <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                        <span className="text-xs font-sans text-stone-800 dark:text-stone-200 truncate line-through opacity-75">
+                        <span data-clarity-mask="True" className="text-xs font-sans text-stone-800 dark:text-stone-200 truncate line-through opacity-75">
                           {item.title}
                         </span>
                         <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-stone-200/70 dark:bg-stone-800 text-stone-600 dark:text-stone-400 capitalize shrink-0">
@@ -438,7 +438,7 @@ const UnfinishedItemRow: React.FC<UnfinishedItemRowProps> = ({
               {formatDuration(item.durationMinutes || getEstimatedDuration(item))}
             </span>
           </div>
-          <h4 className="text-sm font-sans font-medium text-stone-900 dark:text-stone-100 line-clamp-1">
+          <h4 data-clarity-mask="True" className="text-sm font-sans font-medium text-stone-900 dark:text-stone-100 line-clamp-1">
             {item.title}
           </h4>
         </div>

@@ -1,11 +1,11 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Plus, ChevronRight, ChevronLeft, X, RotateCcw, Sparkles } from 'lucide-react';
+import { Plus, ChevronRight, ChevronLeft, X, RotateCcw, Sparkles, Share2 } from 'lucide-react';
 import { ContentItem, CalendarView, DayTheme, BudgetPreset } from '../types';
 import { ContentCard } from './ContentCard';
 import { ContinuationMarker } from './ContinuationMarker';
 import { TimeBudgetHeader } from './TimeBudgetHeader';
 import { QuickPlanModal } from './QuickPlanModal';
-import { getStoredWeekBudget, saveStoredWeekBudget } from '../lib/storage';
+import { getDataStore } from '../lib/dataStore';
 import { WeekDaySlot } from '../lib/quickPlanner';
 import {
   calculateTimeForDate,
@@ -15,6 +15,7 @@ import {
   getEstimatedDuration,
 } from '../lib/timeAccounting';
 import { toDateStr, getWeekDates } from '../lib/dateUtils';
+import { getLocalSharedWeeks } from '../lib/shareWeek';
 import { getWeeklyReviewData } from '../lib/weeklyReview';
 import { trackEvent } from '../lib/analytics';
 
@@ -36,6 +37,7 @@ interface CalendarGridProps {
   onApplyQuickPlan?: (assignments: { itemId: string; targetDateStr: string }[]) => void;
   onOpenQuickPlan?: (budgetMins?: number) => void;
   onOpenWeeklyReview?: () => void;
+  onOpenShareWeek?: () => void;
   onUpdateDuration?: (id: string, durationMinutes: number) => void;
 }
 
@@ -58,6 +60,7 @@ export const CalendarGrid: React.FC<CalendarGridProps> = ({
   onApplyQuickPlan,
   onOpenQuickPlan,
   onOpenWeeklyReview,
+  onOpenShareWeek,
 }) => {
   const [dragOverDate, setDragOverDate] = useState<string | null>(null);
   const [monthlyStyle, setMonthlyStyle] = useState<'visual' | 'text-only'>('visual');
@@ -163,10 +166,18 @@ export const CalendarGrid: React.FC<CalendarGridProps> = ({
   const weekDays = useMemo(() => getWeekDates(currentDate), [currentDate]);
   const weekKey = weekDays[0]?.dateStr || 'week';
 
-  const [budgetState, setBudgetState] = useState(() => getStoredWeekBudget(weekKey));
+  const [budgetState, setBudgetState] = useState(() => {
+    const store = getDataStore();
+    return store.getWeekBudget
+      ? store.getWeekBudget(weekKey)
+      : { availableMinutes: 180, preset: '3h' as BudgetPreset };
+  });
 
   useEffect(() => {
-    setBudgetState(getStoredWeekBudget(weekKey));
+    const store = getDataStore();
+    if (store.getWeekBudget) {
+      setBudgetState(store.getWeekBudget(weekKey));
+    }
 
     const handleBudgetUpdated = (e: any) => {
       if (e.detail?.weekKey === weekKey) {
@@ -182,7 +193,7 @@ export const CalendarGrid: React.FC<CalendarGridProps> = ({
 
   const handleBudgetChange = (mins: number, preset: BudgetPreset) => {
     setBudgetState({ availableMinutes: mins, preset });
-    saveStoredWeekBudget(weekKey, mins, preset);
+    getDataStore().saveWeekBudget?.(weekKey, mins, preset);
     trackEvent('budget_changed', { preset });
   };
 
@@ -206,6 +217,18 @@ export const CalendarGrid: React.FC<CalendarGridProps> = ({
       };
     });
   }, [weekDays, items, dayThemes]);
+
+  // Check if current week has an active public share link (Top-level hook to obey Rules of Hooks)
+  const activeWeekShare = useMemo(() => {
+    try {
+      const startStr = weekDays[0]?.dateStr;
+      if (!startStr) return null;
+      const shares = getLocalSharedWeeks();
+      return shares.find((s) => s.weekStartDate === startStr && s.isActive) || null;
+    } catch {
+      return null;
+    }
+  }, [weekDays]);
 
   const handleDragOver = (e: React.DragEvent, dateStr: string) => {
     e.preventDefault();
@@ -405,7 +428,6 @@ export const CalendarGrid: React.FC<CalendarGridProps> = ({
   // WEEK VIEW (Top-to-Bottom Vertical Journal Layout)
   // ----------------------------------------------------
   if (view === 'week') {
-    const weekDays = getWeekDates();
 
     const formatTotalTime = (mins: number) => {
       if (mins <= 0) return null;
@@ -419,6 +441,7 @@ export const CalendarGrid: React.FC<CalendarGridProps> = ({
     const lastDate = weekDays[6].date;
     const weekRangeLabel = `${firstDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${lastDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
 
+
     return (
       <div className="w-full max-w-5xl mx-auto px-4 sm:px-8 py-6 space-y-4">
         {/* Week View Header & Navigation */}
@@ -427,9 +450,39 @@ export const CalendarGrid: React.FC<CalendarGridProps> = ({
             <span className="text-xs font-sans text-stone-600 dark:text-stone-300 uppercase tracking-widest font-medium">
               Weekly Flow (Top-to-Bottom)
             </span>
-            <h2 className="font-serif text-2xl font-normal text-stone-900 dark:text-stone-100 mt-0.5">
-              {weekRangeLabel}
-            </h2>
+            <div className="flex items-baseline gap-3 mt-0.5 flex-wrap">
+              {activeWeekShare ? (
+                <a
+                  href={`/w/${activeWeekShare.id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-serif text-2xl font-normal text-stone-900 dark:text-stone-100 hover:opacity-75 transition-opacity inline-flex items-center gap-1.5 group cursor-pointer"
+                  title="Click to open public shared page in a new tab"
+                >
+                  <span className="underline decoration-stone-300 dark:decoration-stone-700 underline-offset-4 group-hover:decoration-stone-900 dark:group-hover:decoration-stone-200">
+                    {weekRangeLabel}
+                  </span>
+                  <span className="text-xs font-sans text-stone-500 dark:text-stone-400 no-underline font-normal">
+                    ↗
+                  </span>
+                </a>
+              ) : (
+                <h2 className="font-serif text-2xl font-normal text-stone-900 dark:text-stone-100">
+                  {weekRangeLabel}
+                </h2>
+              )}
+              {activeWeekShare && (
+                <a
+                  href={`/w/${activeWeekShare.id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs font-sans text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 underline underline-offset-4 decoration-stone-300 dark:decoration-stone-700 transition-colors cursor-pointer"
+                  title="Open live public snapshot in a new tab"
+                >
+                  <span>Shared link ↗</span>
+                </a>
+              )}
+            </div>
           </div>
 
           <div className="flex items-center gap-2 self-start sm:self-auto">
@@ -471,6 +524,17 @@ export const CalendarGrid: React.FC<CalendarGridProps> = ({
                 {prevWeekData.totals.unfinishedCount > 0 && (
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
                 )}
+              </button>
+            )}
+            {onOpenShareWeek && (
+              <button
+                type="button"
+                onClick={onOpenShareWeek}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-sans text-stone-700 dark:text-stone-300 hover:text-stone-900 dark:hover:text-stone-100 underline underline-offset-4 decoration-stone-300 dark:decoration-stone-700 transition-colors cursor-pointer"
+                title={activeWeekShare ? "Manage or update shared snapshot" : "Share this week flow as a public snapshot"}
+              >
+                <Share2 className="w-3 h-3 text-stone-400" />
+                <span>{activeWeekShare ? 'Share settings' : 'Share Week'}</span>
               </button>
             )}
           </div>

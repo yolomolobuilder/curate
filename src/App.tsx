@@ -1,3 +1,12 @@
+import { cloudStore, isSupabaseConfigured } from './lib/cloudStore';
+import { AuthModal } from './components/AuthModal';
+import { AccountMenuModal } from './components/AccountMenuModal';
+import { FirstSignInMigrationModal } from './components/FirstSignInMigrationModal';
+import { SyncConflictModal } from './components/SyncConflictModal';
+import { PrivacyPolicyModal } from './components/PrivacyPolicyModal';
+import { TermsOfServiceModal } from './components/TermsOfServiceModal';
+import { SnapshotConflict, mergeSnapshots } from './lib/dataStore';
+import type { User } from '@supabase/supabase-js';
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   CalendarView,
@@ -18,6 +27,7 @@ import {
   StorageFailureInfo,
   exportBackupJson,
 } from './lib/storage';
+import { getDataStore } from './lib/dataStore';
 import { TopNav } from './components/TopNav';
 import { HomePage } from './components/HomePage';
 import { CalendarGrid } from './components/CalendarGrid';
@@ -42,12 +52,20 @@ import { calculateTimeForMonth, calculateTimeForDate } from './lib/timeAccountin
 import { toDateStr, getOffsetDateStr, getTodayStr, getWeekDates } from './lib/dateUtils';
 import { QuickPlanModal } from './components/QuickPlanModal';
 import { WeeklyReviewModal } from './components/WeeklyReviewModal';
+import { ShareWeekModal } from './components/ShareWeekModal';
+import { AnalyticsNoticeBanner } from './components/AnalyticsNoticeBanner';
 import { trackEvent } from './lib/analytics';
 
 export default function App() {
-  const [items, setItems] = useState<ContentItem[]>(() => getStoredItems());
-  const [dayThemes] = useState<DayTheme[]>(() => getStoredDayThemes());
-  const [availableTopics, setAvailableTopics] = useState<string[]>(() => getStoredCustomTopics());
+  const [items, setItems] = useState<ContentItem[]>(() => {
+    return getDataStore().loadAllSync ? getDataStore().loadAllSync!().items : getStoredItems();
+  });
+  const [dayThemes] = useState<DayTheme[]>(() => {
+    return getDataStore().loadSettingsSync ? getDataStore().loadSettingsSync!().dayThemes : getStoredDayThemes();
+  });
+  const [availableTopics, setAvailableTopics] = useState<string[]>(() => {
+    return getDataStore().loadSettingsSync ? getDataStore().loadSettingsSync!().customTopics : getStoredCustomTopics();
+  });
 
   // App opened event: fires exactly once on startup
   useEffect(() => {
@@ -94,6 +112,49 @@ export default function App() {
   const [addModalInitialDate, setAddModalInitialDate] = useState<string | undefined>(undefined);
   const [addModalInitialType, setAddModalInitialType] = useState<ContentType | undefined>(undefined);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
+  // Cloud Auth & Modals
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
+  const [isMigrationModalOpen, setIsMigrationModalOpen] = useState(false);
+  const [isPrivacyModalOpen, setIsPrivacyModalOpen] = useState(false);
+  const [isTermsModalOpen, setIsTermsModalOpen] = useState(false);
+  const [syncConflicts, setSyncConflicts] = useState<SnapshotConflict[]>([]);
+
+  // Listen to Supabase Auth state changes
+  useEffect(() => {
+    const unsubscribe = cloudStore.onAuthStateChange(async (user) => {
+      setCurrentUser(user);
+      if (user) {
+        // If user just signed in and had local items, prompt for migration if not already migrated
+        const localItems = getDataStore().loadAllSync ? getDataStore().loadAllSync!().items : getStoredItems();
+        const nonSampleCount = localItems.filter((i) => !i.isSample).length;
+        const migrationDone = localStorage.getItem('curate_migrated_' + user.id);
+        if (nonSampleCount > 0 && !migrationDone) {
+          setIsMigrationModalOpen(true);
+        } else {
+          // Perform cloud load and snapshot merge
+          try {
+            const cloudData = await cloudStore.loadAll();
+            if (cloudData.items.length > 0) {
+              const localSnapshot = await getDataStore().exportSnapshot();
+              const cloudSnapshot = await cloudStore.exportSnapshot();
+              const merge = mergeSnapshots(localSnapshot, cloudSnapshot);
+              if (merge.conflicts.length > 0) {
+                setSyncConflicts(merge.conflicts);
+              }
+              setItems(merge.mergedSnapshot.items);
+              saveStoredItems(merge.mergedSnapshot.items);
+            }
+          } catch (err) {
+            console.warn('[CloudSync] Initial sync error:', err);
+          }
+        }
+      }
+    });
+    return () => unsubscribe();
+  }, []);
 
   // Desktop notice for viewports below 900px
   const [isDesktopNoticeDismissed, setIsDesktopNoticeDismissed] = useState<boolean>(() => {
@@ -146,6 +207,7 @@ export default function App() {
 
   // Weekly Review Modal state
   const [isWeeklyReviewOpen, setIsWeeklyReviewOpen] = useState(false);
+  const [isShareWeekOpen, setIsShareWeekOpen] = useState(false);
 
   const handlePlanNextWeekFromReview = () => {
     setIsWeeklyReviewOpen(false);
@@ -242,7 +304,12 @@ export default function App() {
   // Save changes to storage
   const handleSaveItems = (newItems: ContentItem[]) => {
     setItems(newItems);
-    saveStoredItems(newItems);
+    const store = getDataStore();
+    if (store.saveItems) {
+      store.saveItems(newItems);
+    } else {
+      saveStoredItems(newItems);
+    }
   };
 
   // Add Item
@@ -589,8 +656,11 @@ export default function App() {
 
   // Custom Topic
   const handleAddCustomTopic = (newTopic: string) => {
-    const updated = saveCustomTopic(newTopic);
-    setAvailableTopics(updated);
+    const store = getDataStore();
+    const updated = store.addCustomTopic ? store.addCustomTopic(newTopic) : saveCustomTopic(newTopic);
+    if (Array.isArray(updated)) {
+      setAvailableTopics(updated);
+    }
   };
 
   // Load starter collection
@@ -721,6 +791,10 @@ export default function App() {
         onToggleDarkMode={() => setDarkMode(!darkMode)}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenWeeklyReview={() => setIsWeeklyReviewOpen(true)}
+                onOpenShareWeek={() => setIsShareWeekOpen(true)}
+        currentUser={currentUser ? { id: currentUser.id, email: currentUser.email } : null}
+        onOpenAuth={() => setIsAuthModalOpen(true)}
+        onOpenAccountMenu={() => setIsAccountMenuOpen(true)}
       />
 
       {/* Main Container: Home (Cosmos landing & library) vs Calendar (Schedule) */}
@@ -763,6 +837,7 @@ export default function App() {
                 onApplyQuickPlan={handleApplyQuickPlan}
                 onOpenQuickPlan={handleOpenQuickPlan}
                 onOpenWeeklyReview={() => setIsWeeklyReviewOpen(true)}
+                onOpenShareWeek={() => setIsShareWeekOpen(true)}
                 onUpdateDuration={handleUpdateDuration}
               />
             </div>
@@ -948,6 +1023,15 @@ export default function App() {
         onUpdateDuration={handleUpdateDuration}
       />
 
+      {/* Share My Week Modal */}
+      <ShareWeekModal
+        isOpen={isShareWeekOpen}
+        onClose={() => setIsShareWeekOpen(false)}
+        currentDate={currentDate}
+        items={items}
+        userId={currentUser?.id}
+        onDateChange={setCurrentDate}
+      />
       {/* Weekly Review Modal (Start-of-week factual totals & triage) */}
       <WeeklyReviewModal
         isOpen={isWeeklyReviewOpen}
@@ -958,6 +1042,76 @@ export default function App() {
         onDeleteItem={handleDeleteItem}
         onPlanNextWeek={handlePlanNextWeekFromReview}
       />
+
+      {/* Auth Modal (Google & Email magic link) */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        onOpenPrivacy={() => setIsPrivacyModalOpen(true)}
+        onOpenTerms={() => setIsTermsModalOpen(true)}
+      />
+
+      {/* Account Menu Modal */}
+      {currentUser && (
+        <AccountMenuModal
+          isOpen={isAccountMenuOpen}
+          onClose={() => setIsAccountMenuOpen(false)}
+          user={currentUser}
+          items={items}
+          onSignedOut={() => {
+            setCurrentUser(null);
+            setIsAccountMenuOpen(false);
+          }}
+          onAccountDeleted={() => {
+            setCurrentUser(null);
+            setIsAccountMenuOpen(false);
+            clearStoredItems();
+            setItems([]);
+          }}
+        />
+      )}
+
+      {/* First Sign-in Migration Modal */}
+      <FirstSignInMigrationModal
+        isOpen={isMigrationModalOpen}
+        onClose={() => setIsMigrationModalOpen(false)}
+        guestItems={items}
+        guestSettings={getDataStore().loadSettingsSync ? getDataStore().loadSettingsSync!() : { customTopics: availableTopics, dayThemes, weekBudgets: {}, dayPreferencesEnabled: true }}
+        onMigrationComplete={(migratedCount) => {
+          if (currentUser) {
+            localStorage.setItem('curate_migrated_' + currentUser.id, 'true');
+          }
+          setIsMigrationModalOpen(false);
+        }}
+        onSkipMigration={() => {
+          if (currentUser) {
+            localStorage.setItem('curate_migrated_' + currentUser.id, 'true');
+          }
+          setIsMigrationModalOpen(false);
+        }}
+      />
+
+      {/* Multi-Device Sync Conflict Resolution Modal */}
+      <SyncConflictModal
+        isOpen={syncConflicts.length > 0}
+        onClose={() => setSyncConflicts([])}
+        conflicts={syncConflicts}
+      />
+
+      {/* Privacy Policy Modal */}
+      <PrivacyPolicyModal
+        isOpen={isPrivacyModalOpen}
+        onClose={() => setIsPrivacyModalOpen(false)}
+      />
+
+      {/* Terms of Service Modal */}
+      <TermsOfServiceModal
+        isOpen={isTermsModalOpen}
+        onClose={() => setIsTermsModalOpen(false)}
+      />
+
+      {/* First-visit Privacy & Analytics Notice Banner */}
+      <AnalyticsNoticeBanner />
     </div>
   );
 }

@@ -636,6 +636,7 @@ export const HomePage: React.FC<HomePageProps> = ({
                 {/* Paste input bar */}
                 <div className="w-full max-w-md mx-auto mb-4 bg-[#141414] rounded-full border border-stone-800 shadow-xl p-1.5 flex items-center gap-2">
                   <input
+                    data-clarity-mask="True"
                     type="text"
                     placeholder="Paste a YouTube, article, podcast, or book link…"
                     value={pasteUrl}
@@ -728,7 +729,7 @@ export const HomePage: React.FC<HomePageProps> = ({
                       key={item.id}
                       className="px-3 py-1.5 rounded-lg bg-stone-900/60 border border-stone-850 flex items-center justify-between text-xs text-stone-300"
                     >
-                      <span className="truncate max-w-[240px] font-serif">{item.title}</span>
+                      <span data-clarity-mask="True" className="truncate max-w-[240px] font-serif">{item.title}</span>
                       <span className="text-[10px] text-stone-500 font-mono capitalize shrink-0 ml-2">
                         {item.contentType}
                       </span>
@@ -1166,6 +1167,7 @@ export const HomePage: React.FC<HomePageProps> = ({
       <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 w-full max-w-xl px-4 pointer-events-auto">
         <div className="relative bg-white/95 dark:bg-[#141414]/95 backdrop-blur-xl rounded-full border border-stone-200/80 dark:border-stone-800 shadow-xl p-1.5 flex items-center gap-2">
           <input
+            data-clarity-mask="True"
             type="text"
             placeholder="Paste a YouTube, article, podcast, or book link…"
             value={pasteUrl}
@@ -1206,7 +1208,7 @@ export const HomePage: React.FC<HomePageProps> = ({
                 <span className="text-[9px] font-sans text-stone-400 uppercase tracking-widest">
                   {CONTENT_TYPE_CONFIG[previewItem.contentType]?.label}
                 </span>
-                <h4 className="font-serif text-xs font-medium text-stone-900 dark:text-stone-100 truncate mt-0.5">
+                <h4 data-clarity-mask="True" className="font-serif text-xs font-medium text-stone-900 dark:text-stone-100 truncate mt-0.5">
                   {previewItem.title}
                 </h4>
               </div>

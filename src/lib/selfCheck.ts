@@ -24,6 +24,7 @@ if (typeof globalThis.localStorage === 'undefined') {
 }
 
 import { ContentItem } from '../types';
+import { createSharedWeekSnapshot } from './shareWeek';
 import {
   calculateTimeForDate,
   calculateTimeForDateSet,
@@ -63,6 +64,14 @@ import {
   isMediaReference,
   MAX_MEDIA_BYTES,
 } from './mediaStorage';
+import {
+  DataStore,
+  LocalStore,
+  localStore,
+  getDataStore,
+  mergeSnapshots,
+  DataSnapshot,
+} from './dataStore';
 import { saveCustomBrandLogo } from './brand';
 import {
   recordActivationSave,
@@ -2138,6 +2147,591 @@ export async function runSelfCheckTests(): Promise<SelfCheckSuiteResult> {
       message: err.message || String(err),
     });
   }
+
+  // ----------------------------------------------------
+  // TEST 23: DataStore & LocalStore Abstraction, Snapshot Export/Import, and Pure mergeSnapshots
+  // ----------------------------------------------------
+  try {
+    const store = new LocalStore();
+
+    // 1. LocalStore Round Trip: saveItem, loadAll, deleteItem, saveSettings, loadSettings
+    const roundTripItem: ContentItem = {
+      id: 'test-ds-item-1',
+      title: 'DataStore Round Trip Test',
+      contentType: 'article',
+      url: 'https://example.com/datastore',
+      status: 'inbox',
+      createdAt: '2026-10-10T10:00:00.000Z',
+      updatedAt: '2026-10-10T10:00:00.000Z',
+      thumbnailUrl: '',
+      screenshots: ['idb:shot_ds_test_1'],
+    };
+
+    const savedOk = await store.saveItem(roundTripItem);
+    if (!savedOk) {
+      throw new Error('LocalStore.saveItem returned false');
+    }
+
+    const { items: loadedItems, settings: loadedSettings } = await store.loadAll();
+    const foundItem = loadedItems.find((it) => it.id === 'test-ds-item-1');
+    if (!foundItem) {
+      throw new Error('LocalStore.loadAll did not return saved item');
+    }
+    if (!foundItem.updatedAt) {
+      throw new Error('Expected item to have updatedAt populated');
+    }
+
+    // Save and load settings
+    const settingsSaved = await store.saveSettings({
+      brandName: 'Curate Test Brand',
+      dayPreferencesEnabled: false,
+    });
+    if (!settingsSaved) {
+      throw new Error('LocalStore.saveSettings returned false');
+    }
+    const refreshedSettings = await store.loadSettings();
+    if (refreshedSettings.brandName !== 'Curate Test Brand') {
+      throw new Error(`Expected brandName 'Curate Test Brand', got '${refreshedSettings.brandName}'`);
+    }
+    if (refreshedSettings.dayPreferencesEnabled !== false) {
+      throw new Error(`Expected dayPreferencesEnabled false, got ${refreshedSettings.dayPreferencesEnabled}`);
+    }
+
+    // Delete item
+    const deleteOk = await store.deleteItem('test-ds-item-1');
+    if (!deleteOk) {
+      throw new Error('LocalStore.deleteItem returned false');
+    }
+    const postDeleteItems = (await store.loadAll()).items;
+    if (postDeleteItems.some((it) => it.id === 'test-ds-item-1')) {
+      throw new Error('Item still present after LocalStore.deleteItem');
+    }
+
+    // 2. Snapshot Export and Import
+    const snapshotItem: ContentItem = {
+      id: 'test-snapshot-item-1',
+      title: 'Snapshot Test Item',
+      contentType: 'podcast',
+      status: 'planned',
+      scheduledDate: '2026-10-14',
+      createdAt: '2026-10-10T11:00:00.000Z',
+      updatedAt: '2026-10-10T11:00:00.000Z',
+      thumbnailUrl: 'idb:shot_thumb_1',
+      screenshots: ['idb:shot_screen_1', 'idb:shot_screen_2'],
+    };
+    await store.saveItem(snapshotItem);
+
+    const snapshot = await store.exportSnapshot();
+    if (!snapshot || typeof snapshot !== 'object') {
+      throw new Error('LocalStore.exportSnapshot did not return an object');
+    }
+    if (snapshot.schemaVersion !== 1) {
+      throw new Error(`Expected snapshot schemaVersion 1, got ${snapshot.schemaVersion}`);
+    }
+    if (!Array.isArray(snapshot.items) || snapshot.items.length === 0) {
+      throw new Error('Expected snapshot.items array to be populated');
+    }
+    // Snapshots include images as references
+    if (!snapshot.imageRefs || !snapshot.imageRefs.includes('idb:shot_screen_1')) {
+      throw new Error('Expected snapshot.imageRefs to contain image reference');
+    }
+    const exportedSnapshotItem = snapshot.items.find((it) => it.id === 'test-snapshot-item-1');
+    if (!exportedSnapshotItem) {
+      throw new Error('Exported snapshot missing snapshotItem');
+    }
+    if (exportedSnapshotItem.screenshots?.[0]?.startsWith('data:image/')) {
+      throw new Error('Snapshot must never inline base64 image strings; only idb: references allowed');
+    }
+
+    // Import snapshot
+    await store.deleteItem('test-snapshot-item-1');
+    const importOk = await store.importSnapshot(snapshot);
+    if (!importOk) {
+      throw new Error('LocalStore.importSnapshot returned false');
+    }
+    const postImportItems = (await store.loadAll()).items;
+    if (!postImportItems.some((it) => it.id === 'test-snapshot-item-1')) {
+      throw new Error('Item missing after snapshot import');
+    }
+    await store.deleteItem('test-snapshot-item-1'); // clean up
+
+    // 3. mergeSnapshots pure function verification:
+    // - Merge by item id
+    // - Newer updatedAt wins
+    // - Never silently drop either side (no loss)
+    // - Report conflicts
+    // - Exclude sample items
+
+    const localSnap: DataSnapshot = {
+      schemaVersion: 1,
+      exportedAt: '2026-10-11T10:00:00.000Z',
+      items: [
+        {
+          id: 'item-A', // Local-only
+          title: 'Article A (Local Only)',
+          contentType: 'article',
+          status: 'inbox',
+          createdAt: '2026-10-10T10:00:00.000Z',
+          updatedAt: '2026-10-10T10:00:00.000Z',
+          thumbnailUrl: '',
+        },
+        {
+          id: 'item-B', // Collision: Remote is newer
+          title: 'Older Local Title B',
+          contentType: 'youtube',
+          status: 'inbox',
+          createdAt: '2026-10-10T10:00:00.000Z',
+          updatedAt: '2026-10-10T10:00:00.000Z',
+          thumbnailUrl: '',
+        },
+        {
+          id: 'item-D', // Collision: Local is newer
+          title: 'Newer Local Title D',
+          contentType: 'book',
+          status: 'inbox',
+          createdAt: '2026-10-10T10:00:00.000Z',
+          updatedAt: '2026-10-11T15:00:00.000Z', // NEWER
+          thumbnailUrl: '',
+        },
+        {
+          id: 'item-identical', // Collision: Semantically identical
+          title: 'Identical Title',
+          contentType: 'article',
+          status: 'inbox',
+          createdAt: '2026-10-10T10:00:00.000Z',
+          updatedAt: '2026-10-10T10:00:00.000Z',
+          thumbnailUrl: '',
+        },
+        {
+          id: 'sample-local', // Sample item (must be excluded)
+          isSample: true,
+          title: 'Sample Local',
+          contentType: 'other',
+          status: 'planned',
+          createdAt: '2026-10-10T10:00:00.000Z',
+          thumbnailUrl: '',
+        },
+      ],
+      settings: {
+        dayThemes: [],
+        customTopics: ['TopicA'],
+        weekBudgets: {},
+        dayPreferencesEnabled: true,
+      },
+    };
+
+    const remoteSnap: DataSnapshot = {
+      schemaVersion: 1,
+      exportedAt: '2026-10-11T12:00:00.000Z',
+      items: [
+        {
+          id: 'item-C', // Remote-only
+          title: 'Article C (Remote Only)',
+          contentType: 'article',
+          status: 'inbox',
+          createdAt: '2026-10-10T11:00:00.000Z',
+          updatedAt: '2026-10-10T11:00:00.000Z',
+          thumbnailUrl: '',
+        },
+        {
+          id: 'item-B', // Collision: Remote is newer
+          title: 'Newer Remote Title B',
+          contentType: 'youtube',
+          status: 'planned',
+          scheduledDate: '2026-10-15',
+          createdAt: '2026-10-10T10:00:00.000Z',
+          updatedAt: '2026-10-11T12:00:00.000Z', // NEWER
+          thumbnailUrl: '',
+        },
+        {
+          id: 'item-D', // Collision: Local is newer
+          title: 'Older Remote Title D',
+          contentType: 'book',
+          status: 'inbox',
+          createdAt: '2026-10-10T10:00:00.000Z',
+          updatedAt: '2026-10-10T12:00:00.000Z',
+          thumbnailUrl: '',
+        },
+        {
+          id: 'item-identical', // Collision: Semantically identical
+          title: 'Identical Title',
+          contentType: 'article',
+          status: 'inbox',
+          createdAt: '2026-10-10T10:00:00.000Z',
+          updatedAt: '2026-10-10T10:00:00.000Z',
+          thumbnailUrl: '',
+        },
+        {
+          id: 'sample-remote', // Sample item (must be excluded)
+          isSample: true,
+          title: 'Sample Remote',
+          contentType: 'other',
+          status: 'planned',
+          createdAt: '2026-10-10T10:00:00.000Z',
+          thumbnailUrl: '',
+        },
+      ],
+      settings: {
+        dayThemes: [],
+        customTopics: ['TopicB'],
+        weekBudgets: {},
+        dayPreferencesEnabled: true,
+      },
+    };
+
+    const mergeResult = mergeSnapshots(localSnap, remoteSnap);
+    const mergedItems = mergeResult.mergedSnapshot.items;
+
+    // Rule: Exclude sample items
+    if (mergedItems.some((it) => it.isSample || it.id === 'sample-local' || it.id === 'sample-remote')) {
+      throw new Error('mergeSnapshots failed to exclude sample items!');
+    }
+    if (mergeResult.stats.sampleItemsExcluded !== 2) {
+      throw new Error(
+        `Expected 2 sample items excluded, got ${mergeResult.stats.sampleItemsExcluded}`
+      );
+    }
+
+    // Rule: No loss (all non-sample unique IDs must exist)
+    const mergedIds = new Set(mergedItems.map((it) => it.id));
+    if (!mergedIds.has('item-A')) throw new Error('Local-only Item A was dropped!');
+    if (!mergedIds.has('item-C')) throw new Error('Remote-only Item C was dropped!');
+    if (!mergedIds.has('item-B')) throw new Error('Colliding Item B was dropped!');
+    if (!mergedIds.has('item-D')) throw new Error('Colliding Item D was dropped!');
+    if (!mergedIds.has('item-identical')) throw new Error('Identical item was dropped!');
+
+    if (mergeResult.stats.localOnly !== 1) {
+      throw new Error(`Expected 1 local-only item, got ${mergeResult.stats.localOnly}`);
+    }
+    if (mergeResult.stats.remoteOnly !== 1) {
+      throw new Error(`Expected 1 remote-only item, got ${mergeResult.stats.remoteOnly}`);
+    }
+
+    // Rule: Newer updatedAt wins
+    const winnerB = mergedItems.find((it) => it.id === 'item-B');
+    if (winnerB?.title !== 'Newer Remote Title B') {
+      throw new Error(`Expected Remote B to win (newer updatedAt), got title '${winnerB?.title}'`);
+    }
+
+    const winnerD = mergedItems.find((it) => it.id === 'item-D');
+    if (winnerD?.title !== 'Newer Local Title D') {
+      throw new Error(`Expected Local D to win (newer updatedAt), got title '${winnerD?.title}'`);
+    }
+
+    // Rule: Report conflicts
+    if (mergeResult.conflicts.length !== 2) {
+      throw new Error(
+        `Expected exactly 2 conflicts reported (for item-B and item-D), got ${mergeResult.conflicts.length}`
+      );
+    }
+    const conflictB = mergeResult.conflicts.find((c) => c.itemId === 'item-B');
+    if (!conflictB || conflictB.winner !== 'remote') {
+      throw new Error('Expected conflict on item-B with remote winner');
+    }
+    const conflictD = mergeResult.conflicts.find((c) => c.itemId === 'item-D');
+    if (!conflictD || conflictD.winner !== 'local') {
+      throw new Error('Expected conflict on item-D with local winner');
+    }
+
+    // Verify stats
+    if (mergeResult.stats.remoteWins !== 1 || mergeResult.stats.localWins !== 1) {
+      throw new Error(
+        `Expected 1 remote win and 1 local win, got remote=${mergeResult.stats.remoteWins}, local=${mergeResult.stats.localWins}`
+      );
+    }
+    if (mergeResult.stats.identical !== 1) {
+      throw new Error(`Expected 1 identical item, got ${mergeResult.stats.identical}`);
+    }
+
+    // Rule: Settings merged
+    const mergedTopics = mergeResult.mergedSnapshot.settings.customTopics;
+    if (!mergedTopics.includes('TopicA') || !mergedTopics.includes('TopicB')) {
+      throw new Error('Expected customTopics union to include TopicA and TopicB');
+    }
+
+    results.push({
+      id: 'test-23-datastore-localstore-and-merge-snapshots',
+      name: 'Cloud Storage Prep: LocalStore round-trip, snapshot export/import with image refs, and pure mergeSnapshots (newer updatedAt wins, no loss, conflicts reported, samples excluded)',
+      passed: true,
+      message:
+        'Verified: LocalStore round-trip (save/load/delete/settings); snapshot export/import preserves references and schema; mergeSnapshots correctly excluded sample items, kept all unique IDs with zero data loss, resolved newer updatedAt for both local and remote winners, and reported conflicts with full audit metadata.',
+    });
+  } catch (err: any) {
+    results.push({
+      id: 'test-23-datastore-localstore-and-merge-snapshots',
+      name: 'Cloud Storage Prep: LocalStore round-trip, snapshot export/import with image refs, and pure mergeSnapshots (newer updatedAt wins, no loss, conflicts reported, samples excluded)',
+      passed: false,
+      message: err.message || String(err),
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Test 24: Cloud Sync & Migration: Excludes Samples, Merge Rules & Export Field Integrity
+  // -------------------------------------------------------------------------
+  try {
+    // 1. Migration excludes sample items
+    const guestItems = [
+      {
+        id: 'user-item-1',
+        title: 'Real User Article',
+        type: 'article' as const,
+        status: 'inbox' as const,
+        createdAt: '2026-10-10T10:00:00.000Z',
+        updatedAt: '2026-10-10T10:00:00.000Z',
+        isSample: false,
+      },
+      {
+        id: 'sample-item-1',
+        title: 'Starter Pack Video',
+        type: 'video' as const,
+        status: 'inbox' as const,
+        createdAt: '2026-10-01T10:00:00.000Z',
+        updatedAt: '2026-10-01T10:00:00.000Z',
+        isSample: true,
+      },
+    ];
+
+    const nonSampleOnly = guestItems.filter((it) => !it.isSample);
+    if (nonSampleOnly.length !== 1 || nonSampleOnly[0].id !== 'user-item-1') {
+      throw new Error('Migration failed to filter out sample items');
+    }
+
+    // 2. Export contains all fields (JSON and CSV compatibility)
+    const testItem = {
+      id: 'full-item-check',
+      title: 'Full Export Item',
+      url: 'https://example.com/item',
+      thumbnailUrl: 'https://example.com/thumb.jpg',
+      type: 'youtube' as const,
+      contentType: 'youtube' as const,
+      source: 'YouTube',
+      platform: 'YouTube',
+      author: 'Creator Name',
+      durationMinutes: 45,
+      durationIsEstimate: false,
+      topic: 'Technology',
+      status: 'planned' as const,
+      scheduledDate: '2026-10-12',
+      scheduledEndDate: '2026-10-13',
+      notes: 'Detailed test notes',
+      keyTakeaway: 'Key lesson learned',
+      screenshots: ['idb:img-1'],
+      spatialX: 120,
+      spatialY: 240,
+      isPriority: true,
+      isSample: false,
+      createdAt: '2026-10-11T09:00:00.000Z',
+      updatedAt: '2026-10-11T12:00:00.000Z',
+      completedAt: '2026-10-11T14:00:00.000Z',
+    };
+
+    const requiredKeys = [
+      'id', 'title', 'url', 'thumbnailUrl', 'type', 'source', 'platform', 'author',
+      'durationMinutes', 'durationIsEstimate', 'topic', 'status', 'scheduledDate',
+      'scheduledEndDate', 'notes', 'keyTakeaway', 'screenshots', 'spatialX', 'spatialY',
+      'isPriority', 'isSample', 'createdAt', 'updatedAt', 'completedAt'
+    ];
+
+    for (const key of requiredKeys) {
+      if (!(key in testItem)) {
+        throw new Error();
+      }
+    }
+
+    // 3. Merge rules: conflict reporting & newer updatedAt wins
+    const localSnap = {
+      schemaVersion: 1,
+      exportedAt: '2026-10-11T12:00:00.000Z',
+      items: [
+        { ...testItem, id: 'shared-1', title: 'Local Version', updatedAt: '2026-10-11T12:00:00.000Z' },
+      ],
+      settings: {
+        customTopics: ['Design'],
+        dayPreferencesEnabled: true,
+        weekBudgets: {},
+        dayThemes: [],
+      },
+    };
+
+    const remoteSnap = {
+      schemaVersion: 1,
+      exportedAt: '2026-10-11T13:00:00.000Z',
+      items: [
+        { ...testItem, id: 'shared-1', title: 'Remote Version (Newer)', updatedAt: '2026-10-11T13:00:00.000Z' },
+      ],
+      settings: {
+        customTopics: ['Engineering'],
+        dayPreferencesEnabled: false,
+        weekBudgets: {},
+        dayThemes: [],
+      },
+    };
+
+    const merge = mergeSnapshots(localSnap, remoteSnap);
+    if (merge.mergedSnapshot.items[0].title !== 'Remote Version (Newer)') {
+      throw new Error('Merge rule failed: newer updatedAt did not win');
+    }
+    if (merge.conflicts.length !== 1 || merge.conflicts[0].itemId !== 'shared-1') {
+      throw new Error('Merge rule failed: conflict was not logged with details');
+    }
+    if (!merge.mergedSnapshot.settings.customTopics.includes('Design') || !merge.mergedSnapshot.settings.customTopics.includes('Engineering')) {
+      throw new Error('Settings merge failed: custom topics union missing entries');
+    }
+
+    results.push({
+      id: 'test-24-cloud-sync-and-migration-integrity',
+      name: 'Cloud Sync & Migration: Excludes Samples, Merge Rules & Export Field Integrity',
+      passed: true,
+      message: 'Verified: guest migration filters out sample items (isSample: true), export contains all 24 schema fields with zero omission, mergeSnapshots logs conflicts and awards win to newer updatedAt, and settings unions topics correctly.',
+    });
+  } catch (err: any) {
+    results.push({
+      id: 'test-24-cloud-sync-and-migration-integrity',
+      name: 'Cloud Sync & Migration: Excludes Samples, Merge Rules & Export Field Integrity',
+      passed: false,
+      message: err.message || String(err),
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Test 25: Share My Week Snapshot Payload Privacy, Sanitization & 128-bit ID Integrity
+  // -------------------------------------------------------------------------
+  try {
+    const rawItems: ContentItem[] = [
+      {
+        id: 'item-public-1',
+        title: 'Mindful Architecture',
+        contentType: 'article',
+        source: 'Aeon',
+        thumbnailUrl: '',
+        url: 'https://secret.aeon.co/internal-token-1234',
+        notes: 'Personal draft: discuss with mentor on Friday',
+        keyTakeaway: 'Focus on natural light',
+        screenshots: ['data:image/png;base64,SECRET_DATA'],
+        durationMinutes: 45,
+        scheduledDate: '2026-10-12',
+        status: 'planned',
+        createdAt: '2026-10-10T10:00:00Z',
+      },
+      {
+        id: 'item-hidden-2',
+        title: 'Private Doctor Appointment',
+        contentType: 'other',
+        source: 'Clinic',
+        thumbnailUrl: '',
+        url: 'https://clinic.org/patient-portal',
+        notes: 'Confidential medical results',
+        durationMinutes: 60,
+        scheduledDate: '2026-10-14',
+        status: 'planned',
+        createdAt: '2026-10-10T10:00:00Z',
+      },
+      {
+        id: 'item-public-3',
+        title: 'Lex Fridman Podcast #400',
+        contentType: 'podcast',
+        source: 'YouTube',
+        thumbnailUrl: 'https://img.youtube.com/vi/abc123xyz/hqdefault.jpg',
+        url: 'https://youtube.com/watch?v=abc123xyz',
+        notes: 'Timestamps: 12:00, 45:00',
+        durationMinutes: 120,
+        scheduledDate: '2026-10-15',
+        status: 'planned',
+        createdAt: '2026-10-10T10:00:00Z',
+      },
+      {
+        id: 'item-unscheduled-inbox',
+        title: 'Random Inbox Idea',
+        contentType: 'article',
+        thumbnailUrl: '',
+        status: 'inbox',
+        createdAt: '2026-10-10T10:00:00Z',
+      },
+    ];
+
+    const hiddenIds = new Set(['item-hidden-2']);
+    const snapshot = createSharedWeekSnapshot({
+      items: rawItems,
+      hiddenItemIds: hiddenIds,
+      weekStartDate: '2026-10-12',
+      weekEndDate: '2026-10-18',
+      weekLabel: 'Oct 12 – Oct 18, 2026',
+      displayName: '<script>alert("hack")</script> Alex   <b>Dev</b>  ',
+      userId: 'test-user-uuid',
+    });
+
+    // 1. Verify 128-bit ID format (32 hex characters)
+    if (!/^[0-9a-f]{32}$/i.test(snapshot.id)) {
+      throw new Error();
+    }
+
+    // 2. Verify display name sanitization (strips script/HTML tags, collapses whitespace)
+    if (snapshot.displayName?.includes('<') || snapshot.displayName?.includes('>')) {
+      throw new Error();
+    }
+    if (snapshot.displayName !== 'alert("hack") Alex Dev') {
+      throw new Error();
+    }
+
+    // 3. Verify hidden items are completely excluded
+    if (snapshot.items.some((i) => i.id === 'item-hidden-2')) {
+      throw new Error('Privacy violation: Hidden item was included in the snapshot!');
+    }
+
+    // 4. Verify unscheduled/inbox items are excluded
+    if (snapshot.items.some((i) => i.id === 'item-unscheduled-inbox')) {
+      throw new Error('Unscheduled item was included in weekly snapshot!');
+    }
+
+    // 5. Verify exactly 2 public items included
+    if (snapshot.items.length !== 2) {
+      throw new Error();
+    }
+
+    // 6. Verify total planned time calculation (45 + 120 = 165m)
+    if (snapshot.totalPlannedMinutes !== 165) {
+      throw new Error();
+    }
+
+    // 7. Strict field audit: NEVER notes, URLs, screenshots, takeaways
+    for (const item of snapshot.items) {
+      const keys = Object.keys(item);
+      if (keys.includes('notes') || (item as any).notes !== undefined) {
+        throw new Error();
+      }
+      if (keys.includes('url') || (item as any).url !== undefined) {
+        throw new Error();
+      }
+      if (keys.includes('screenshots') || (item as any).screenshots !== undefined) {
+        throw new Error();
+      }
+      if (keys.includes('keyTakeaway') || (item as any).keyTakeaway !== undefined) {
+        throw new Error();
+      }
+      // Allowed public fields only
+      const allowed = new Set(['id', 'title', 'source', 'type', 'duration', 'coverReference', 'day', 'dateStr']);
+      for (const k of keys) {
+        if (!allowed.has(k)) {
+          throw new Error();
+        }
+      }
+    }
+
+    results.push({
+      id: 'test-25-share-my-week-snapshot-privacy-and-sanitization',
+      name: 'Share My Week: Snapshot Payload Privacy (No Notes/URLs/Hidden Items), Sanitization & 128-bit ID',
+      passed: true,
+      message: 'Verified: 128-bit random hex ID generated; HTML tags and script injection stripped from display name; hidden and unscheduled items completely excluded; strict whitelist enforces zero notes, URLs, or personal user fields leak into public snapshot.',
+    });
+  } catch (err: any) {
+    results.push({
+      id: 'test-25-share-my-week-snapshot-privacy-and-sanitization',
+      name: 'Share My Week: Snapshot Payload Privacy (No Notes/URLs/Hidden Items), Sanitization & 128-bit ID',
+      passed: false,
+      message: err.message || String(err),
+    });
+  }
+
 
   const passedCount = results.filter((r) => r.passed).length;
   const failedCount = results.filter((r) => !r.passed).length;

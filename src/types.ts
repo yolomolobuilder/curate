@@ -40,6 +40,7 @@ export interface ContentItem {
   spatialX?: number; // 2D coordinate on infinite cosmos canvas
   spatialY?: number; // 2D coordinate on infinite cosmos canvas
   createdAt: string;
+  updatedAt?: string; // ISO 8601 timestamp tracking latest content or state modification
   completedAt?: string;
   isPriority?: boolean; // Starred high priority item
   isSample?: boolean; // Flagged sample item (e.g. from curated starter pack) - never counts toward 3-5-1 activation

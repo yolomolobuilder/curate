@@ -24,7 +24,7 @@ import {
 } from '../lib/quickPlanner';
 import { formatHoursMinutes, formatDuration } from '../lib/timeAccounting';
 import { getTodayStr } from '../lib/dateUtils';
-import { getStoredDayPreferencesEnabled } from '../lib/storage';
+import { getDataStore } from '../lib/dataStore';
 import { trackEvent } from '../lib/analytics';
 import { DurationBadgeWithPicker } from './DurationEditor';
 
@@ -57,7 +57,7 @@ export const QuickPlanModal: React.FC<QuickPlanModalProps> = ({
   const [strategy, setStrategy] = useState<PlanningStrategy>('priority_oldest');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [enableDayPreferences, setEnableDayPreferences] = useState(() =>
-    getStoredDayPreferencesEnabled()
+    getDataStore().getDayPreferencesEnabled ? getDataStore().getDayPreferencesEnabled!() : true
   );
 
   // Sync day preferences if updated from Settings
@@ -387,7 +387,7 @@ export const QuickPlanModal: React.FC<QuickPlanModalProps> = ({
                               <span>Priority</span>
                             </span>
                           )}
-                          <h4 className="font-serif text-sm font-medium text-stone-900 dark:text-stone-100 truncate">
+                          <h4 data-clarity-mask="True" className="font-serif text-sm font-medium text-stone-900 dark:text-stone-100 truncate">
                             {pi.item.title}
                           </h4>
                         </div>
@@ -401,7 +401,7 @@ export const QuickPlanModal: React.FC<QuickPlanModalProps> = ({
                             className="text-stone-600 dark:text-stone-300 font-mono"
                           />
                           <span>·</span>
-                          <span className="truncate max-w-[140px] text-stone-400">
+                          <span data-clarity-mask="True" className="truncate max-w-[140px] text-stone-400">
                             {pi.item.source || pi.item.author || 'Curate'}
                           </span>
                         </div>
@@ -464,7 +464,7 @@ export const QuickPlanModal: React.FC<QuickPlanModalProps> = ({
                               <span>Priority</span>
                             </span>
                           )}
-                          <h4 className="font-serif text-xs font-medium text-stone-800 dark:text-stone-200 truncate">
+                          <h4 data-clarity-mask="True" className="font-serif text-xs font-medium text-stone-800 dark:text-stone-200 truncate">
                             {item.title}
                           </h4>
                         </div>

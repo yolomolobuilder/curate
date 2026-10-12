@@ -19,6 +19,9 @@ import {
   RefreshCw,
   Info,
   Settings as SettingsIcon,
+  Cloud,
+  LogIn,
+  ExternalLink,
 } from 'lucide-react';
 import { APP_VERSION, BUILD_DATE_STRING } from '../lib/buildInfo';
 import {
@@ -26,6 +29,7 @@ import {
   getYouTubeApiKey,
 } from '../lib/youtubeDuration';
 import { getStoredItems, saveStoredItems } from '../lib/storage';
+import { getDataStore } from '../lib/dataStore';
 import {
   getCustomBrandLogo,
   saveCustomBrandLogo,
@@ -62,6 +66,11 @@ interface SettingsBackupModalProps {
   onClearAll: () => void;
   onDataReloaded: () => void;
   totalItems: number;
+  currentUser?: { email?: string; id: string } | null;
+  onOpenAuth?: () => void;
+  onOpenAccountMenu?: () => void;
+  onOpenPrivacy?: () => void;
+  onOpenTerms?: () => void;
 }
 
 export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
@@ -71,6 +80,11 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
   onClearAll,
   onDataReloaded,
   totalItems,
+  currentUser = null,
+  onOpenAuth,
+  onOpenAccountMenu,
+  onOpenPrivacy,
+  onOpenTerms,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importSuccess, setImportSuccess] = useState(false);
@@ -150,7 +164,7 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
   const handleToggleDayPreferences = () => {
     const next = !dayPreferencesEnabled;
     setDayPreferencesEnabled(next);
-    saveStoredDayPreferencesEnabled(next);
+    getDataStore().saveDayPreferencesEnabled?.(next);
   };
 
   const handleRunSelfCheck = async () => {
@@ -162,12 +176,16 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
     setIsRefreshingYouTube(true);
     setRefreshYouTubeStatus(null);
     try {
-      const currentItems = getStoredItems();
+      const { items: currentItems } = await getDataStore().loadAll();
       const res = await refreshAllEstimatedYouTubeItems(currentItems);
       if (res.error) {
         setRefreshYouTubeStatus(res.error);
       } else if (res.updatedCount > 0) {
-        saveStoredItems(res.updatedItems);
+        if (getDataStore().saveItems) {
+          await getDataStore().saveItems!(res.updatedItems);
+        } else {
+          saveStoredItems(res.updatedItems);
+        }
         onDataReloaded();
         setRefreshYouTubeStatus(`Updated ${res.updatedCount} YouTube duration${res.updatedCount === 1 ? '' : 's'}.`);
       } else {
@@ -277,6 +295,85 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
 
         {/* Content */}
         <div className="p-6 space-y-4 overflow-y-auto flex-1">
+          {/* Account & Cloud Sync Section */}
+          <div className="p-4 rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Cloud className="w-4 h-4 text-emerald-500" />
+                <span className="font-sans text-xs font-semibold text-stone-900 dark:text-stone-100">
+                  Account & Cloud Sync
+                </span>
+              </div>
+              <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 border border-stone-200 dark:border-stone-700">
+                {currentUser ? 'Signed in' : 'Guest mode'}
+              </span>
+            </div>
+
+            {currentUser ? (
+              <div className="space-y-2">
+                <p className="text-[11px] text-stone-600 dark:text-stone-300">
+                  Signed in as <strong>{currentUser.email}</strong>. Multi-device cloud sync active with PostgreSQL Row-Level Security.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onOpenAccountMenu?.();
+                  }}
+                  className="w-full py-2 px-3 rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-stone-850 hover:bg-stone-100 dark:hover:bg-stone-800 text-xs font-medium text-stone-800 dark:text-stone-200 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  Manage Account & Data Export
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-[11px] text-stone-500 dark:text-stone-400">
+                  You are currently in <strong>Guest Mode</strong> (data stored in this browser only). Create an account or sign in with Google or Email magic link to sync across your devices.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onOpenAuth?.();
+                  }}
+                  className="w-full py-2 px-3 rounded-lg bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900 hover:opacity-90 text-xs font-medium flex items-center justify-center gap-1.5 transition-opacity cursor-pointer shadow-xs"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  <span>Create Account / Sign In</span>
+                </button>
+              </div>
+            )}
+
+            <div className="pt-2 border-t border-stone-100 dark:border-stone-800 flex items-center justify-between text-[10px] text-stone-400">
+              <div className="flex items-center gap-1">
+                <ShieldCheck className="w-3.5 h-3.5 text-stone-400" />
+                <span>Guest mode is never disabled</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onOpenPrivacy?.();
+                  }}
+                  className="underline hover:text-stone-600 dark:hover:text-stone-200"
+                >
+                  Privacy
+                </button>
+                <span>·</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onOpenTerms?.();
+                  }}
+                  className="underline hover:text-stone-600 dark:hover:text-stone-200"
+                >
+                  Terms
+                </button>
+              </div>
+            </div>
+          </div>
           {/* Storage Save Failure / Safe Mode Alert */}
           {storageFailure && (
             <div className="p-4 rounded-xl bg-red-500/10 dark:bg-red-500/15 border border-red-500/30 text-red-950 dark:text-red-200 space-y-2.5">

@@ -179,12 +179,12 @@ export const SearchModal: React.FC<SearchModalProps> = ({
                         )}
                       </div>
 
-                      <h4 className="font-serif text-sm font-semibold text-stone-900 dark:text-stone-100 truncate mt-0.5 group-hover:text-amber-900 dark:group-hover:text-amber-200">
+                      <h4 data-clarity-mask="True" className="font-serif text-sm font-semibold text-stone-900 dark:text-stone-100 truncate mt-0.5 group-hover:text-amber-900 dark:group-hover:text-amber-200">
                         {item.title}
                       </h4>
 
                       <div className="flex items-center gap-2 text-[11px] text-stone-400 font-sans mt-0.5">
-                        {item.author && <span>{item.author}</span>}
+                        {item.author && <span data-clarity-mask="True">{item.author}</span>}
                         {item.durationMinutes && <span>· {item.durationMinutes}m</span>}
                       </div>
                     </div>

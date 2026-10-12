@@ -8,6 +8,9 @@ import {
   Sun,
   Moon,
   Settings,
+  User as UserIcon,
+  Cloud,
+  LogIn,
 } from 'lucide-react';
 import { CalendarView, APP_NAME } from '../types';
 import { CurateLogo } from './CurateLogo';
@@ -35,6 +38,10 @@ interface TopNavProps {
   onToggleDarkMode: () => void;
   onOpenSettings?: () => void;
   onOpenWeeklyReview?: () => void;
+  onOpenShareWeek?: () => void;
+  currentUser?: { email?: string; id: string } | null;
+  onOpenAuth?: () => void;
+  onOpenAccountMenu?: () => void;
 }
 
 export const TopNav: React.FC<TopNavProps> = ({
@@ -58,6 +65,10 @@ export const TopNav: React.FC<TopNavProps> = ({
   onToggleDarkMode,
   onOpenSettings,
   onOpenWeeklyReview,
+  onOpenShareWeek,
+  currentUser = null,
+  onOpenAuth,
+  onOpenAccountMenu,
 }) => {
   const [customLogo, setCustomLogo] = React.useState<string | null>(() => getCustomBrandLogo());
   const [brandName, setBrandName] = React.useState<string>(() => getCustomBrandName());
@@ -257,14 +268,38 @@ export const TopNav: React.FC<TopNavProps> = ({
             <span>Add</span>
           </button>
 
-          {/* Visible Note: Guest Mode Browser-only Badge */}
-          <div
-            title="Guest Mode: All data lives strictly in this browser."
-            className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-sans text-stone-500 bg-stone-100 border border-stone-200/60 dark:text-stone-100 dark:bg-black dark:border-stone-800 select-none cursor-default"
-          >
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-            <span>Guest · Browser Only</span>
-          </div>
+          {/* Account / Cloud Sync or Guest Mode button */}
+          {currentUser ? (
+            <button
+              type="button"
+              onClick={onOpenAccountMenu}
+              title="Account settings & sync"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-sans text-stone-700 bg-stone-100 border border-stone-200 dark:text-stone-200 dark:bg-stone-900 dark:border-stone-800 hover:border-stone-400 dark:hover:border-stone-600 transition-colors cursor-pointer"
+            >
+              <div className="w-4 h-4 rounded-full bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900 flex items-center justify-center text-[10px] font-bold font-serif">
+                {currentUser.email ? currentUser.email.charAt(0).toUpperCase() : 'U'}
+              </div>
+              <span className="max-w-[100px] truncate text-[11px] font-medium hidden md:inline">
+                {currentUser.email?.split('@')[0] || 'Account'}
+              </span>
+              <Cloud className="w-3 h-3 text-emerald-500 shrink-0" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onOpenAuth}
+              title="Create an account or sign in for multi-device cloud sync"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-sans text-stone-700 bg-stone-100/90 border border-stone-200/90 hover:bg-stone-200/60 dark:text-stone-300 dark:bg-stone-900/80 dark:border-stone-800 dark:hover:bg-stone-800 hover:text-stone-900 dark:hover:text-stone-100 transition-all cursor-pointer shadow-2xs hover:scale-102"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+              <span className="text-[11px] font-medium hidden sm:inline">Guest</span>
+              <span className="text-[11px] text-stone-400 dark:text-stone-500 hidden sm:inline">·</span>
+              <span className="text-[11px] font-medium text-stone-900 dark:text-stone-100 flex items-center gap-1">
+                <LogIn className="w-3 h-3" />
+                Sign in
+              </span>
+            </button>
+          )}
 
           {/* Theme toggle */}
           <button

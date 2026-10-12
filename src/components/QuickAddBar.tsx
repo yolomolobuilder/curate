@@ -136,6 +136,7 @@ export const QuickAddBar: React.FC<QuickAddBarProps> = ({
           </div>
 
           <input
+            data-clarity-mask="True"
             type="text"
             placeholder="Paste any link to plan (YouTube, article, podcast, book)..."
             value={url}
@@ -192,10 +193,10 @@ export const QuickAddBar: React.FC<QuickAddBarProps> = ({
               </div>
 
               <div className="min-w-0 flex-1">
-                <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400">
+                <span data-clarity-mask="True" className="text-[10px] font-mono uppercase tracking-wider text-stone-400">
                   {CONTENT_TYPE_CONFIG[previewItem.contentType]?.label} · {previewItem.platform}
                 </span>
-                <h4 className="font-serif text-xs font-semibold text-stone-900 dark:text-stone-100 truncate mt-0.5">
+                <h4 data-clarity-mask="True" className="font-serif text-xs font-semibold text-stone-900 dark:text-stone-100 truncate mt-0.5">
                   {previewItem.title}
                 </h4>
                 <p className="text-[11px] text-amber-700 dark:text-amber-400 font-sans mt-0.5 flex items-center gap-1">

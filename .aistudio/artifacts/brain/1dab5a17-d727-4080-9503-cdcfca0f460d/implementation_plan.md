@@ -1,24 +1,28 @@
-# Budget Status Neutral Styling & Custom Weekly Budget Fix
+# Clickable Week Share Link & Pure Text-Based UI Refinement
 
-Align the calendar budget status and capacity indicators to Curate's minimal editorial brand palette (subtle stone gray tones, removing green and red accents), and repair the custom budget option on the week calendar view with flexible inline input parsing (e.g. `4h`, `240m`, `1h 30m`).
+Enhance the **Share My Week** experience by making the shared week link directly clickable to open in a new tab (both in the calendar week header and the share modal), while replacing all heavy button shapes, pill capsules, and footer images with pure, quiet editorial text links and clean typography.
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> The following preferences were confirmed during clarification and will govern the implementation:
+> The following design decisions were confirmed during clarification and govern the implementation:
 
-- **Confirmed Decision 1 (Custom Budget Input)**: Direct inline input supporting natural human expressions like `4h`, `240m`, `1.5h`, or `2h 30m` directly inside the weekly budget preset bar, auto-committing on Enter or blur with Escape cancellation.
-- **Confirmed Decision 2 (Budget Status Aesthetics)**: Subtle stone gray typography for both remaining and over-budget states, paired with a sleek monochrome stone capacity bar (`stone-800` / `stone-200`) completely replacing green (`emerald`) and red (`rose`) tokens.
+- **Confirmed Decision 1 (Clickable Link Action)**: Clicking the shared week link opens the public shared page (`/w/:id`) directly in a new tab (`target="_blank"`), while maintaining an adjacent one-click copy affordance.
+- **Confirmed Decision 2 (Affordance Placement)**: The clickable link is positioned in **both** the calendar week header (giving instant access to view/share the published week) and inside the Share My Week modal.
+- **Confirmed Decision 3 (Text-Based Styling & Anti-Shape Discipline)**: Absolutely no images in the footer, and no rounded pill capsule buttons or bulky container shapes. All footer actions, navigation, and secondary controls transition to pure quiet text links with subtle hover underlines and typographic mid-dot (`·`) separators.
 
 ---
 
 ## 1. Overview & Core Concept
 
 - **What It Does**:
-  - Restyles the calendar's weekly time budget status metrics, over-budget warnings, and capacity progress bar to strictly use Curate's neutral editorial grayscale/stone palette.
-  - Fixes the "Custom" weekly budget control in `TimeBudgetHeader` so users can seamlessly click "Custom", type their target weekly time in natural hours or minutes (e.g. `4h`, `90m`, `3.5h`), and have it instantly update the week's capacity calculations, remaining time metrics, and localStorage persistence.
-- **Target Audience & Workflow**: Users managing their weekly media, reading, and learning commitments in Curate who need an accurate, friction-free budget planner matching the app's refined aesthetic.
-- **Key Value**: Restores full control over weekly schedule capacity while preserving a clean, distraction-free monochrome visual tone.
+  - **Clickable Week in Calendar Header**: In the Week view header, if a share link has been generated for the active week, the week display features an elegant, clickable text link that opens the live `/w/:id` public view in a new tab. If no link exists yet, clicking "Share Week" opens the creation modal.
+  - **Clickable Link in Share Modal**: The generated URL in `ShareWeekModal` is rendered as an interactive, clickable link opening directly in a new tab, alongside a clean "Copy" text trigger.
+  - **Pure Text-Based Footer (Public `/w/:id` Page)**: Removes heavy pill buttons (`border-radius: 9999px`), background fills, and any footer graphics. Replaces them with a quiet editorial typographic footer: the Curate wordmark followed by pure inline text links (`Plan your own week on Curate`, `Report this page`), maintaining event tracking (`share_cta_clicked`).
+  - **De-cluttered Modal & View Controls**: Simplifies status badges, item toggles, and modal actions from chunky button shapes into clean typographic text buttons adhering to the Universal Frontend Design Constitution (zero-pill discipline).
+
+- **Target Audience / Workflow**:
+  - Curate users sharing their weekly reading/watching plan with peers, colleagues, or social circles who want frictionless link access and a clean, high-taste editorial aesthetic.
 
 ---
 
@@ -26,78 +30,103 @@ Align the calendar budget status and capacity indicators to Curate's minimal edi
 
 ### Key User Flows
 
-1. **Viewing Weekly Budget Status**:
-   - The user opens the Week view on the calendar.
-   - The header displays Available time, Planned time, Done time, and Remaining / Over Budget status.
-   - All status readouts render in serene stone grays (`text-stone-600 dark:text-stone-300` / `text-stone-700 dark:text-stone-200`) instead of harsh emerald green and rose red.
-   - The capacity bar fills with a smooth dark stone indicator (`bg-stone-800 dark:bg-stone-200`) against a subtle neutral track (`bg-stone-100 dark:bg-stone-800`).
-2. **Setting a Custom Weekly Budget**:
-   - The user clicks the **Custom** preset pill in the weekly budget header.
-   - An inline input immediately appears in place of or adjacent to the Custom button, pre-populated with the current budget (e.g., `3h` or `180m`).
-   - The user can type `4h`, `4.5h`, `250m`, or `3h 15m`.
-   - Pressing **Enter**, clicking the check button, or unfocusing (blur) parses the input, stores the total minutes in localStorage, updates the week's budget state, and marks the Custom pill as actively selected.
-   - Pressing **Escape** discards edits without modifying the existing budget.
+1. **Viewing & Opening Shared Week from Calendar**:
+   - The user navigates to the Week view.
+   - When the active week has an active public link, the week title or adjacent status indicator clearly shows a quiet, clickable link (e.g. `Shared ↗` or clickable week label).
+   - Clicking the link opens `https://domain/w/:id` in a new tab.
+   - Clicking `Share` or the settings icon opens the `ShareWeekModal` for updating snapshots or toggling privacy.
+
+2. **Managing Link Inside Share Modal**:
+   - In `ShareWeekModal`, the active link is presented as a clean, highlighted text link.
+   - Clicking the link opens `/w/:id` in a new tab.
+   - Next to it, quiet text actions (`Copy`, `Turn Off`, `Delete`) replace bulky nested button boxes.
+   - Item hide/show toggles are styled as simple text links (`Hide` / `Show`) instead of heavy gray buttons.
+
+3. **Public Shared Page Footer (`/w/:id`)**:
+   - At the bottom of the public page, there are **no images** or decorative graphics.
+   - No pill-shaped buttons with dark background fills.
+   - Instead, a minimal hairline border separates the content stream from a quiet typographic footer:
+     ```text
+     Curate · Curate Your Curiosity
+
+     Plan your own week on Curate ↗   ·   Report this page
+     Snapshot · Read-only
+     ```
+   - Clicking `Plan your own week on Curate` navigates to `/?ref=share` and fires the `share_cta_clicked` beacon.
 
 ### Visual Identity & Theme Tokens
 
-- **Budget Status Text**:
-  - Normal/Remaining: `text-stone-600 dark:text-stone-300 font-serif` (tabular numerals)
-  - Over Budget: `text-stone-800 dark:text-stone-200 font-sans font-medium` with quiet `text-stone-500` secondary text and neutral alert icon
-- **Capacity Bar**:
-  - Track: `bg-stone-100 dark:bg-stone-800/80`
-  - Fill: `bg-stone-800 dark:bg-stone-200` (neutral monochrome across all capacity levels)
-- **Inline Custom Editor**:
-  - Subtle stone container (`bg-stone-100 dark:bg-stone-850 border-stone-200 dark:border-stone-700`)
-  - Crisp monospace font (`font-mono text-xs`) with placeholder `e.g. 4h or 240m`
+- **Typography**: Editorial serif headings (`Newsreader` / serif) paired with clean geometric body sans (`Plus Jakarta Sans`) and tabular numerals for durations.
+- **Link Styling**: Plain text (`text-stone-700 dark:text-stone-300`) with subtle hover color transition (`hover:text-stone-900 dark:hover:text-white`) and underline offset (`hover:underline underline-offset-4`).
+- **Zero Pill / Anti-Slop**:
+  - Replace `rounded-full bg-emerald-500` status dots with subtle text labels: `Active` or `Inactive (410)`.
+  - Replace pill button `.plan-cta-btn` with quiet text link styling: `text-stone-900 dark:text-stone-100 underline underline-offset-4 font-medium`.
 
 ---
 
 ## 3. Key Product Decisions & Trade-Offs
 
-- **Flexible Time Parsing Function (`parseDurationInput`)**:
-  - *Chosen Approach*: Implement a robust duration parser that understands raw numbers, decimals, and hour/minute units (`4`, `4h`, `4.5h`, `4 hrs`, `4 hours`, `90m`, `90 mins`, `2h 30m`). For bare numbers without units: $\le 16$ is interpreted as hours (e.g. entering `4` yields 240 minutes for a weekly budget), while $> 16$ is interpreted as minutes (e.g. entering `90` yields 90 minutes).
-  - *Why*: Eliminates the previous failure where users typed `4` intending 4 hours, which was either rejected by `min="5"` or scheduled 4 minutes of weekly content.
-- **Monochrome Capacity Bar**:
-  - *Chosen Approach*: Replace green/amber/rose color shifts with a uniform stone charcoal bar.
-  - *Why*: Satisfies the user's explicit branding requirement ("green and red are not part of the branding") while maintaining visual feedback via percentage label and bar width.
+- **Click-to-Open vs Click-to-Copy**:
+  - *Chosen Approach*: Link text directly navigates to the page in a new window (`target="_blank"`), with an explicit text button for copying to clipboard.
+  - *Why*: Satisfies the user's explicit preference ("the link is the main thing that they may want to share. so it week should be clickable... Click to open the public shared page in new tab") while still allowing rapid link copying.
+- **Header Affordance Integration**:
+  - *Chosen Approach*: When a week has been shared, render a quiet, elegant clickable indicator directly in the week view toolbar: `Shared ↗` linking to `/w/:id`, alongside the `Share Week` modal toggle.
+  - *Why*: Avoids modifying the calendar grid layout while providing immediate one-click verification of what viewers will see.
+- **Server Rendered Footer Simplification**:
+  - *Chosen Approach*: Strip all rounded container pills and CSS button shapes from `server.ts`'s HTML generator, using pure typographic layout with semantic `<a>` tags.
+  - *Why*: Direct compliance with user guidance ("please do not add image in the footer like the attached image... the current design has too much buttons/shapes while it could be a simple text like the image attached").
 
 ---
 
 ## 4. Technical Architecture & Data Strategy
 
-### Component & Data Flow Diagram
+### Technical Architecture Diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                       CalendarGrid                          │
-│  State: budgetState { availableMinutes, preset }            │
-│  Storage: curatecal_week_budget_<weekKey>                   │
+│                    Calendar Week View                       │
+│  - Week Date Range & Navigation                             │
+│  - If Week Shared: "Shared ↗" Clickable Link (New Tab)     │
+│  - "Share Week" Trigger ──► ShareWeekModal                  │
 └──────────────────────────────┬──────────────────────────────┘
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    TimeBudgetHeader                         │
-│  Props: availableMinutes, plannedMinutes, currentPreset     │
-│  - Neutral Stone Gray Status Typography (No Green/Red)      │
-│  - Monochrome Capacity Bar (bg-stone-800 / bg-stone-200)   │
-│  - Preset Buttons: 30m | 1h | 2h | 3h | 5h | 7h | 10h       │
-│  - Custom Preset Button & Inline Flexible Parser:           │
-│      "4h" / "240m" / "1h 30m" ──► parseDurationInput()      │
-│                                      │                      │
-│                                      ▼                      │
-│                           onBudgetChange(mins, 'custom')    │
-└─────────────────────────────────────────────────────────────┘
+│                      ShareWeekModal                         │
+│  - Public Link Box: Direct Clickable <a> (New Tab)         │
+│  - Quiet Text Actions: "Copy" | "Turn Off" | "Delete"       │
+│  - Per-item Toggles: Minimal "Hide" / "Show" text links    │
+│  - Zero bulky card-in-card shapes                           │
+└──────────────────────────────┬──────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│             Server-Side HTML Renderer (/w/:id)              │
+│  - Server.ts: clean responsive HTML with OpenGraph tags     │
+│  - Body: Editorial Day Stream                               │
+│  - Footer: NO images, NO pill buttons                       │
+│  - Pure quiet text links with "share_cta_clicked" beacon    │
+└──────────────────────────────┘
 ```
 
-### Component Adjustments
+### Component & File Mapping
 
-1. **`src/lib/timeAccounting.ts`**:
-   - Add `parseDurationInput(input: string): number | null` to reliably parse user-entered strings (`"4h"`, `"4"`, `"90m"`, `"1h 30m"`, `"2.5h"`) into total minutes with bounds checking ($15\text{m} \le \text{mins} \le 6000\text{m}$).
-   - Add `formatDurationCompact(minutes: number): string` to format numbers cleanly as `"4h"`, `"90m"`, or `"2h 30m"`.
-2. **`src/components/TimeBudgetHeader.tsx`**:
-   - Remove `text-rose-600`, `text-rose-400`, `text-emerald-700`, `text-emerald-400`, `bg-rose-500`, `bg-emerald-500`, and `bg-amber-500`.
-   - Update Remaining & Over Budget status elements to use neutral `text-stone-600 dark:text-stone-300` and `text-stone-800 dark:text-stone-200`.
-   - Update Capacity progress bar fill to `bg-stone-800 dark:bg-stone-200`.
-   - Improve the "Custom" preset button behavior so clicking it opens the inline editor with current budget formatted (e.g. `4h`), auto-selects the text, allows inline editing, submits on Enter or blur, and properly updates the preset state to `'custom'`.
-3. **`src/components/QuickPlanModal.tsx`**:
-   - Ensure budget status text inside Quick Plan modal uses neutral stone styling instead of `text-rose-500` / `text-emerald-600`.
+1. **`src/components/CalendarGrid.tsx`**:
+   - Check local shared weeks store for active share matching current `weekStartDate`.
+   - In the week view header, display an inline clickable text link `Shared ↗` (opening `/w/:id` in `_blank`) whenever a share exists for that week.
+   - Keep the clean "Share" trigger button without changing the grid layout.
+
+2. **`src/components/ShareWeekModal.tsx`**:
+   - Update URL display: turn the link text into a direct `<a href="/w/:id" target="_blank">` element with hover underline.
+   - Refactor buttons into minimalist text-first controls (replacing nested gray pill buttons with clean text links and subtle dividers).
+   - Ensure "Hide" / "Show" controls are lightweight text triggers.
+
+3. **`server.ts`**:
+   - In `renderPublicWeekHtml`, update `.page-footer` styles: remove `.plan-cta-btn` rounded pill container and dark background.
+   - Render the CTA as a refined, unboxed editorial text link: `<a href="/?ref=share" id="plan-cta" class="plan-cta-link">Plan your own week on Curate &rarr;</a>`.
+   - Ensure no footer images or unnecessary badge shapes are present.
+   - Verify OpenGraph tags and 410 Gone page match this refined aesthetic.
+
+4. **Self-Check & Regression Suite**:
+   - Update `src/lib/selfCheck.ts` to verify snapshot integrity and link generation.
+   - Run compilation and verify dev server responsiveness on port 3000.

@@ -59,6 +59,7 @@ export const ContentCard: React.FC<ContentCardProps> = ({
         <div className="flex items-start justify-between gap-2">
           {/* Requirement 4: Wrap on word boundaries and truncate with ellipsis after two lines */}
           <h4
+            data-clarity-mask="True"
             title={item.title}
             className={`font-serif text-[12px] sm:text-[13px] leading-snug line-clamp-2 break-words font-normal flex-1 ${
               isCompleted
@@ -101,7 +102,7 @@ export const ContentCard: React.FC<ContentCardProps> = ({
 
         {/* Requirement 2 & 3: Single consistent source field & at least 12px WCAG AA text */}
         <div className="flex items-center justify-between text-xs text-stone-600 dark:text-stone-300 font-sans mt-2 pt-1.5 border-t border-stone-100 dark:border-stone-850/60">
-          <span className="truncate max-w-[65%] font-medium">
+          <span data-clarity-mask="True" className="truncate max-w-[65%] font-medium">
             {source} <span className="opacity-40 font-normal">·</span> <span className="capitalize opacity-75 font-normal">{item.contentType}</span>
           </span>
           <DurationBadgeWithPicker
@@ -146,7 +147,7 @@ export const ContentCard: React.FC<ContentCardProps> = ({
           />
         ) : (
           <div className="w-full h-full flex flex-col items-center justify-center p-3 text-center bg-stone-100 dark:bg-stone-900 text-stone-500">
-            <span className="font-serif italic text-xs sm:text-sm line-clamp-2 break-words">{item.title}</span>
+            <span data-clarity-mask="True" className="font-serif italic text-xs sm:text-sm line-clamp-2 break-words">{item.title}</span>
           </div>
         )}
 
@@ -202,6 +203,7 @@ export const ContentCard: React.FC<ContentCardProps> = ({
       <div className={`${compact ? 'pt-1.5 px-0.5' : 'pt-2 px-0.5'}`}>
         {/* Requirement 4: Title wraps on word boundaries and truncates with ellipsis after two lines */}
         <h4
+          data-clarity-mask="True"
           title={item.title}
           className={`font-serif leading-snug line-clamp-2 break-words font-normal tracking-tight ${
             compact ? 'text-[12px] sm:text-[13px]' : 'text-[13px] sm:text-[14px]'
@@ -216,7 +218,7 @@ export const ContentCard: React.FC<ContentCardProps> = ({
 
         {/* Requirement 2 & 3: Single consistent source field & content type on caption & >=12px text */}
         <div className="text-xs text-stone-600 dark:text-stone-300 font-sans flex items-center justify-between mt-1 tracking-normal">
-          <span className="truncate max-w-[70%] font-medium">
+          <span data-clarity-mask="True" className="truncate max-w-[70%] font-medium">
             {source} <span className="opacity-40 font-normal">·</span> <span className="capitalize opacity-75 font-normal">{item.contentType}</span>
           </span>
           <DurationBadgeWithPicker

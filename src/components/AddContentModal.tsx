@@ -166,6 +166,7 @@ export const AddContentModal: React.FC<AddContentModalProps> = ({
           {/* Main URL Bar */}
           <div className="relative">
             <input
+              data-clarity-mask="True"
               type="text"
               autoFocus
               placeholder="Paste a YouTube, article, podcast, or book link…"
@@ -204,6 +205,7 @@ export const AddContentModal: React.FC<AddContentModalProps> = ({
                     {CONTENT_TYPE_CONFIG[contentType]?.label || 'Media'}
                   </span>
                   <input
+                    data-clarity-mask="True"
                     type="text"
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
@@ -212,7 +214,7 @@ export const AddContentModal: React.FC<AddContentModalProps> = ({
                   />
                 </div>
 
-                <p className="text-[11px] text-stone-400 font-sans truncate">
+                <p data-clarity-mask="True" className="text-[11px] text-stone-400 font-sans truncate">
                   {author || platform || 'CurateCal'}
                   {durationMinutes ? ` · ${durationMinutes}m` : ''}
                 </p>

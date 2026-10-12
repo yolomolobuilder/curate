@@ -24,11 +24,7 @@ import { extractYouTubeId, refetchItemMetadata } from '../lib/metadataExtractor'
 import { formatDuration } from '../lib/timeAccounting';
 import { trackEvent } from '../lib/analytics';
 import { DurationChips, DurationBadgeWithPicker } from './DurationEditor';
-import {
-  saveMediaItem,
-  getMediaItemSync,
-  deleteMediaItem,
-} from '../lib/mediaStorage';
+import { getDataStore } from '../lib/dataStore';
 
 interface ContentDetailModalProps {
   item: ContentItem | null;
@@ -107,7 +103,7 @@ export const ContentDetailModal: React.FC<ContentDetailModalProps> = ({
               const base64 = event.target?.result as string;
               if (base64 && item) {
                 const shotKey = `shot_${item.id}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-                const ref = await saveMediaItem(shotKey, base64, 200 * 1024);
+                const ref = await getDataStore().saveMedia(shotKey, base64);
                 setScreenshots((prev) => {
                   const updated = [...prev, ref];
                   onUpdate(item.id, { screenshots: updated });
@@ -268,7 +264,7 @@ export const ContentDetailModal: React.FC<ContentDetailModalProps> = ({
       const base64 = event.target?.result as string;
       if (base64 && item) {
         const shotKey = `shot_${item.id}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-        const ref = await saveMediaItem(shotKey, base64, 200 * 1024);
+        const ref = await getDataStore().saveMedia(shotKey, base64);
         setScreenshots((prev) => {
           const updated = [...prev, ref];
           onUpdate(item.id, { screenshots: updated });
@@ -282,7 +278,7 @@ export const ContentDetailModal: React.FC<ContentDetailModalProps> = ({
   const handleDeleteScreenshot = (index: number) => {
     const targetShot = screenshots[index];
     if (targetShot) {
-      deleteMediaItem(targetShot);
+      getDataStore().deleteMedia(targetShot);
     }
     setScreenshots((prev) => {
       const updated = prev.filter((_, i) => i !== index);
@@ -345,6 +341,7 @@ export const ContentDetailModal: React.FC<ContentDetailModalProps> = ({
 
             {item.url && (
               <a
+                data-clarity-mask="True"
                 href={item.url}
                 target="_blank"
                 rel="noopener noreferrer"
@@ -545,6 +542,7 @@ export const ContentDetailModal: React.FC<ContentDetailModalProps> = ({
                   Title
                 </label>
                 <input
+                  data-clarity-mask="True"
                   type="text"
                   value={editTitle}
                   onChange={(e) => handleTitleChange(e.target.value)}
@@ -577,6 +575,7 @@ export const ContentDetailModal: React.FC<ContentDetailModalProps> = ({
                   Source / Creator
                 </label>
                 <input
+                  data-clarity-mask="True"
                   type="text"
                   value={editSource}
                   onChange={(e) => handleSourceChange(e.target.value)}
@@ -616,6 +615,7 @@ export const ContentDetailModal: React.FC<ContentDetailModalProps> = ({
             </div>
 
             <textarea
+              data-clarity-mask="True"
               rows={2}
               value={keyTakeaway}
               onChange={(e) => setKeyTakeaway(e.target.value)}
@@ -645,6 +645,7 @@ export const ContentDetailModal: React.FC<ContentDetailModalProps> = ({
             </div>
 
             <textarea
+              data-clarity-mask="True"
               rows={4}
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
@@ -708,9 +709,9 @@ export const ContentDetailModal: React.FC<ContentDetailModalProps> = ({
                     className="group relative aspect-16/10 rounded-xl overflow-hidden bg-stone-900 border border-stone-200 dark:border-stone-800 shadow-xs cursor-pointer"
                   >
                     <img
-                      src={getMediaItemSync(shot) || shot}
+                      src={getDataStore().getMediaSync(shot) || shot}
                       alt={`Screenshot ${idx + 1}`}
-                      onClick={() => setZoomScreenshot(getMediaItemSync(shot) || shot)}
+                      onClick={() => setZoomScreenshot(getDataStore().getMediaSync(shot) || shot)}
                       className="w-full h-full object-cover transition-transform group-hover:scale-104"
                     />
 
@@ -718,7 +719,7 @@ export const ContentDetailModal: React.FC<ContentDetailModalProps> = ({
                     <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
                       <button
                         type="button"
-                        onClick={() => setZoomScreenshot(getMediaItemSync(shot) || shot)}
+                        onClick={() => setZoomScreenshot(getDataStore().getMediaSync(shot) || shot)}
                         className="p-1.5 rounded-full bg-white/90 text-stone-900 hover:scale-110 transition-transform"
                         title="View Fullscreen"
                       >
@@ -819,7 +820,7 @@ export const ContentDetailModal: React.FC<ContentDetailModalProps> = ({
         >
           <div className="relative max-w-5xl max-h-[90vh]">
             <img
-              src={getMediaItemSync(zoomScreenshot) || zoomScreenshot}
+              src={getDataStore().getMediaSync(zoomScreenshot) || zoomScreenshot}
               alt="Zoomed Screenshot"
               className="max-w-full max-h-[90vh] object-contain rounded-xl shadow-2xl"
             />
