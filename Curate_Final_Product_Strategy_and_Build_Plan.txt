@@ -1,0 +1,478 @@
+CURATE
+Product Strategy, Validation Roadmap & Google AI Studio Build Specification
+Final consolidated document — October 2026
+
+Working name: Curate. This document consolidates the two supplied source documents and the decisions selected during reconciliation. Core product remains non-AI; optional AI is not on the committed roadmap.
+Executive summary
+
+Three biggest opportunities
+Own the space between visual curation and actual consumption planning: the product turns saved content into scheduled consumption.
+Make time-aware planning the utility layer: weekly available time, duration, drag-and-drop, and a visual calendar give the product a job beyond bookmarking.
+Build a calm, non-AI product with deterministic planning. This keeps costs predictable and makes the product feel like a focused tool rather than an AI wrapper.
+Three biggest problems
+The screenshots communicate save/curate better than why a user should schedule.
+The calendar can become a beautiful planning surface without creating a completion or weekly-return loop.
+The visual concept invites feature sprawl before product-market signal; social, AI, gamification, complex tagging and large integrations must remain gated.
+Reconciled decisions
+
+
+Part I — Product strategy
+1. Product audit
+What Curate does
+Curate lets users save YouTube videos, articles, podcasts and books into a visual infinite canvas, keep unscheduled items in an Inbox, and then schedule them across a calendar using Day, Week and Month views. The central transformation is from “interesting things I have saved” to “the things I will actually consume this week.”
+Who it is for
+
+Core value proposition
+Primary: Turn the content you save into a realistic schedule you can actually follow.
+Secondary: Curate your interests visually, then decide when you will watch, read, listen, or learn.
+Screenshot-based UX findings
+
+Aha moment
+Recommended behavioral definition: a user saves 3–5 pieces of content, schedules at least 1, and opens the calendar to see a coherent plan. Target time-to-aha: under 3 minutes.
+Secondary activation metric
+Also measure whether users who save 5 items and schedule 3 are more likely to return the following week. Do not replace 3–5–1 before collecting evidence.
+2. Market & competition
+The relevant competitive set is not only calendar software. Curate sits at the intersection of visual bookmarking, read-it-later/reference tools, and personal planning. The opportunity is the gap between these categories.
+
+
+Category language
+Recommended: visual content planner / personal consumption planner / personal learning calendar. Avoid “content calendar” as the primary category because the phrase is strongly associated with social-media publishing.
+3. Feature strategy and prioritization
+
+Top 3 immediate product priorities
+1. Time Budget + Quick Plan: gives the calendar a concrete job and creates a deterministic “smart” outcome without AI cost.
+2. 3–5–1 activation: creates a measurable first success and gets users to the differentiating surface quickly.
+3. Messaging + empty state: makes the product’s planning purpose understandable before users need instructions.
+4. Monetization
+
+Recommended initial structure
+
+
+Upgrade triggers
+Adding the 101st item.
+Needing unlimited history or advanced planning controls.
+Using Pro sharing/capture capabilities.
+Any future feature that has a clear ongoing-value relationship to an active user.
+Do not cripple basic scheduling to force payment. Public beta comes before technical billing.
+Unit-economics frame
+Source assumption from the no-AI build analysis: variable cost was estimated at about USD $0.4/month per paying user when AI usage is removed. Because the final price is now EUR (BGN) 5/month, actual margin and LTV should be recalculated once infrastructure and billing fees are observed. Do not scale paid acquisition until retention produces acceptable payback.
+5. Growth & acquisition
+
+First 100 users
+
+
+6. Retention & metrics
+
+Early warning signs
+Users save content but rarely schedule it → collection is more compelling than planning.
+Users schedule but do not return → calendar is useful once but not habit-forming.
+Users complete very little of what they schedule → planning is unrealistic.
+Users ask for folders/tags/database features before they use the calendar → positioning may be drifting toward bookmark management.
+Users like screenshots but do not return → visual appeal is attracting attention without creating utility.
+Cheap validation tests
+Five-user usability test: ask people to add three things and plan a week without explanation.
+Landing message test: “Save links visually” vs “Turn saved content into a weekly plan.”
+Time Budget test: manually run the planning exercise with ten people and observe usefulness.
+Completion test: add a simple complete action and see whether users return the next week.
+Public collection test: publish three hand-curated artifacts and measure sign-ups.
+7. Technical & business risks
+
+
+Part II — Combined 30 / 60 / 90-day validation + build roadmap
+Phase 1 — Days 1–30: Prove activation
+
+
+Phase 2 — Days 31–60: Prove repeat usage
+
+Phase 3 — Days 61–90: Prove distribution and first revenue
+
+
+Post-90-day expansion path
+
+
+Part III — Technical build specification
+Core architecture principles
+Core functionality must not depend on AI or external model APIs.
+Prefer deterministic algorithms and free/public endpoints where appropriate.
+Keep operating costs predictable.
+Keep API keys server-side.
+Keep APP_NAME in one constant so the working name can change in one place.
+Reuse existing components and preserve routes/data/drag-and-drop behavior.
+Do not redesign unrelated screens during feature work.
+Before every implementation change, AI Studio must first propose a plan in five bullets or fewer, list assumptions, then implement.
+After every change, AI Studio should explain how to test it in under two minutes.
+Back up/duplicate the project before larger architectural changes.
+Data model baseline
+The core content item should at minimum support: id, url, type, title, source, imageUrl, durationMin, priority, status, plannedDate, createdAt, metadataFetchedAt. User settings should include weeklyHoursAvailable, theme and planning preferences. Public sharing must use separate unguessable IDs/tokens and never expose private library data.
+Analytics with Umami
+Use Umami for privacy-conscious web analytics and a small first-party product event log for behavioral events. Core events: item_added, item_planned, item_completed, first_run_activation, weekly_review_opened, share_created, share_imported, upgrade_viewed, purchase_completed.
+Security baseline for future real-link capture
+Allow only http/https article fetches.
+Block private/local IP ranges.
+Use short timeouts and strict response-size limits.
+Limit redirects.
+Sanitize fetched text before rendering.
+Never make an external source or API key the canonical record; the source URL is canonical.
+Cache metadata only as long as product/API rules allow and revalidate current platform policies before launch-scale use.
+
+Part IV — Sequential Google AI Studio prompts
+Use one prompt at a time. Paste the standing rules first, let the agent provide its plan and assumptions, read the plan, then let it implement. Run the test line after each stage. If a change breaks unrelated behavior, tell the agent to revert the last change. Do not ask AI Studio to rebuild the whole product in one shot.
+Standing prompt — paste before every stage
+STANDING RULES. Apply to this change and every later one.
+- App: Curate, a visual planner for videos, articles, podcasts and books. Keep the current look: dark editorial design, serif italic titles, jewel-tone cards, light/dark toggle.
+- Make only the change described below. Do not redesign, rename or remove other features.
+- Do not add any AI or LLM feature and do not call the Gemini API.
+- Do not add a paid service without asking me first. Prefer free public APIs and built-in browser features.
+- Keep the app name in one constant (APP_NAME) so it can be renamed in one place.
+- Keep every API key and secret server-side. Never put them in client code.
+- Before coding, give me a plan in 5 bullets or fewer and list assumptions. Then implement.
+- When done, tell me how to test the change in under 2 minutes.
+- Reuse existing components. Preserve routes, existing data, drag-and-drop and working features.
+- Do not add generic SaaS dashboard patterns, chatbots, AI badges, gamification or unnecessary onboarding.
+
+Prompt 1A — Quick UI fixes
+Make these small fixes on the existing screens. Change nothing else.
+1. Home: the hero headline and paste bar must never overlap or clip at widths from 1024px to 2560px. Keep the paste bar centered and visible.
+2. Cards: use one source field consistently on the card face and caption.
+3. Raise the smallest card-face and metadata text to at least 12px and meet WCAG AA contrast in dark and light themes.
+4. Titles: wrap on word boundaries and truncate with an ellipsis after two lines.
+5. The type icon must follow the actual item type.
+6. Add a text wordmark using APP_NAME = 'Curate'.
+Test: resize Home from 1024px to 2560px, switch themes, and inspect card type/source/title rendering.
+
+Prompt 1B — Messaging and first-use experience
+Improve the first-use experience without changing the overall visual design.
+Headline: Everything worth exploring. On your schedule.
+Supporting copy: Save YouTube videos, articles, podcasts and books, then plan when you'll actually consume them.
+Primary input placeholder: Paste a YouTube, article, podcast, or book link…
+Primary action: Save
+Empty state: Start with 3 things you want to consume this week.
+Actions: + Add a video / + Add an article / + Add a book
+Do not add a carousel, AI messaging, fake user data, or generic onboarding dashboards.
+The product should remain understandable from the interface itself.
+
+Prompt 1C — 3–5–1 activation flow
+Build a lightweight first-use activation flow.
+Target activation: 3 saved items → 1 scheduled item → Calendar viewed.
+After saves, show a subtle 1 of 3 / 2 of 3 / 3 of 3 progress state.
+After the third item, offer: Your week is ready to plan.
+Primary: Plan my week. Secondary: I'll do it manually.
+Do not force a tutorial. Do not use AI. Keep the flow subtle and editorial.
+Also instrument the activation milestone for product analytics.
+
+Prompt 2 — Time Budget + deterministic Quick Plan
+Build Time Budget and Quick Plan as one combined planning feature.
+1. Week view shows AVAILABLE, PLANNED and REMAINING time.
+2. Presets: 30m, 1h, 2h, 3h, 5h, 7h, 10h, Custom.
+3. Each item exposes duration, type, priority toggle, scheduled state and completion state.
+4. If the plan exceeds the budget, show OVER BUDGET but never block the user.
+5. Quick Plan must be deterministic and explainable. Use weekly budget, duration, priority, content age, type and existing calendar.
+6. Default behavior should automatically select a sensible set while leaving roughly 10–20% of budget free when possible.
+7. Provide an Advanced option for planning rules: oldest first, shortest first, or alternate by type.
+8. Always preview the proposed schedule before applying it.
+9. Allow drag-and-drop edits, cancel and undo.
+Do not use AI or call any model.
+
+Prompt 3 — Completion system
+Add lightweight completion states: Saved, Scheduled, In Progress, Completed, Skipped.
+Allow users to mark scheduled content complete.
+Completed items become visually quieter but remain visible.
+Week view shows a subtle completed count and consumed time.
+Do not add streaks, XP, badges or gamification.
+
+Prompt 4 — Inbox and backlog management
+Improve the Inbox for larger collections.
+Filters: All, Videos, Articles, Podcasts, Books; Unscheduled, Scheduled, Completed.
+Duration filters: <15m, 15–30m, 30–60m, 1h+.
+Sorting: Newest, Oldest, Shortest, Longest, Priority.
+Add one simple Priority toggle, not a task-manager priority system.
+Show an Inbox summary such as 23 unplanned / 7h 42m total.
+Button: Plan 2h → opens Quick Plan.
+Do not introduce folders, nested databases, complex tagging or AI categorization.
+
+Prompt 5 — Weekly Review
+Add a Weekly Review at the beginning of a new week.
+Show previous-week totals, Completed, Still interested, and Didn't get to.
+For unfinished items: Keep / Reschedule / Remove.
+Primary action: Plan next week.
+Use existing content and Time Budget.
+Do not generate AI commentary or motivational copy.
+
+Prompt 6 — Accounts and persistence after validation
+Add accounts and cloud persistence only after the first product-validation gate has passed.
+Choose the simplest supported free-tier backend inside AI Studio Build. Propose the backend, expected cost at 1,000 users, and required setup before implementation; wait for my OK.
+Support Google sign-in and email-link sign-in.
+Keep guest mode with browser-local data. After sign-in, offer to move guest data into the account.
+User data: items and settings. Enforce user-level security rules.
+Add account menu actions: Export, Sign out, Delete account.
+Export JSON and CSV. Delete requires confirmation.
+Add Privacy and Terms pages with clearly marked placeholders for storage and third parties.
+Never expose private data through public sharing.
+
+Prompt 7 — Share My Week
+Add Share My Week.
+A Week-view button creates an unlisted public read-only page with a random unguessable ID.
+It shows Monday–Sunday, card cover/title/source/duration/type and total planned time.
+Owner controls: choose week, hide items, turn link off, delete link.
+No name or email unless the owner voluntarily adds a display name.
+Add Open Graph/Twitter meta tags and a 1200×630 preview image.
+Anyone with the link can view. Saving/importing into Curate requires an account.
+Add noindex and rate-limit share creation.
+Test in a private browser and through a messaging-app link preview.
+
+Prompt 8 — Share Collections
+Add Share Collections after Share My Week is stable.
+A user can select content and create a public collection with title, optional description, visual cards, source, duration and type.
+The public page should have a Save to my Curate action that requires an account before importing.
+Never expose private calendar data or unrelated items.
+Do not add likes, comments, followers, feeds or social profiles.
+
+Prompt 9 — Public-beta monetization
+Prepare simple Free and Pro entitlements for public beta.
+FREE: up to 100 saved items, Canvas, Inbox, Day/Week/Month calendar, manual scheduling, Time Budget, Quick Plan and completion tracking.
+PRO: unlimited items, unlimited collections, advanced planning, Weekly Review, Share My Week, Share Collections and future capture features.
+Price hypothesis: EUR (BGN) 5/month or EUR (BGN) 39.99/year.
+Do not add payment processing until public-beta usage has been observed.
+Do not add AI credits or AI pricing.
+Use natural upgrade moments, never dark patterns. Lapsed users retain their existing data and exports.
+
+Prompt 10 — Later: Sessions for long content
+Do not implement until core planning and retention are validated.
+For items longer than 45 minutes, add Split into sessions.
+Default session length: 30 minutes for books, 45 minutes for videos/courses.
+Create linked session cards with session numbering and progress.
+Daily and weekly totals count session minutes, not the full parent duration.
+Books may optionally record page ranges.
+Support rescheduling, deleting a session and merging back into one item.
+Test a 3-hour book split into six 30-minute sessions.
+
+Prompt 11 — Later: Real-link capture
+Do not implement until user behavior validates that saving real content is the primary friction.
+Support YouTube and articles first, then podcasts/books.
+YouTube: server-side oEmbed for title/channel/thumbnail and YouTube Data API for duration. Keep API key server-side and cache metadata according to current YouTube policy.
+Articles: fetch Open Graph/Twitter metadata on the server with strict SSRF protections, short timeout and response-size limit.
+Failure must never block saving. If metadata fails, save the URL and allow manual Edit details.
+Use real images where available; keep the current generated poster as fallback.
+Do not call AI.
+
+Prompt 12 — Later: Faster capture
+Only build after real-link capture is stable.
+1. Multi-link paste: URLs separated by new lines or spaces → one Inbox card each.
+2. Public YouTube playlist import with preview and selection; skip duplicates.
+3. Bookmarklet / URL parameter for saving the current page into Inbox.
+4. Everything lands in Inbox first.
+Do not build a full browser extension yet and do not store browsing history.
+
+Prompt 13 — Post-90-day: Calendar integration
+Only build after retention evidence shows users repeatedly plan weeks.
+Add Download this week as .ics.
+Add a private subscribed calendar feed with a secret token that can be regenerated.
+Use all-day events because planning is day-based, not time-of-day based.
+Description should include source, duration and original link.
+Completed items should be clearly marked.
+Build for everyone first; paid gating can come later.
+
+Prompt 14 — AI policy / future experiment
+Do not implement now.
+Curate must remain fully functional without AI.
+Only revisit AI if user research repeatedly identifies a planning problem that deterministic Quick Plan cannot solve.
+Any future AI feature must be opt-in, explicit, rate-limited, replaceable and off by default.
+Do not add an AI chatbot, AI navigation, automatic AI tags, routine summaries or AI pricing.
+If an AI feature is ever tested, send only the minimum metadata required and provide a visible off switch plus a hard usage cap.
+The deterministic Quick Plan remains the default and fallback.
+
+
+Final operating rules
+1. Do not add features because they look good in the interface; add them because they strengthen SAVE → ORGANIZE → PLAN → CONSUME → COMPLETE.
+2. Run user tests at gates. Do not use feature completion as the reason to move to the next phase.
+3. Preserve Curate’s current dark editorial identity. Make it more opinionated, not more ornamental.
+4. Keep AI out of the core. Do not assume AI is required for intelligence, recommendations or planning.
+5. Build persistence only after early validation. Do not spend heavily on infrastructure before the behavior is proven.
+6. Use Umami and first-party events to learn what users actually do.
+7. Public launch should happen after Share My Week is stable and the activation/retention behavior is understood.
+8. Public launch comes before technical billing; monetize after evidence of repeat use.
+9. Use EUR (BGN) 5/month and EUR (BGN) 39.99/year as the starting pricing hypothesis, then measure willingness to pay.
+10. Calendar sync, real-link capture, Sessions and any AI should remain gated behind evidence.
+
+
+Appendix — Screenshots reviewed
+These screenshots were the visual basis for the UX audit. They are included here as reference, not as additional product requirements.
+Screenshot 1
+
+Screenshot 2
+
+Screenshot 3
+
+Screenshot 4
+
+
+North star / Everything worth exploring. On your schedule.
+
+
+Topic | Decision
+Core problem | People save too much interesting content and rarely consume it.
+Core loop | SAVE → ORGANIZE → PLAN → CONSUME → COMPLETE
+Product | Visual planner for YouTube videos, articles, podcasts and books.
+Wedge | Visual curation + time-aware consumption planning.
+Primary promise | Turn the content you save into a realistic schedule you can actually follow.
+AI stance | No AI in the core product. No AI roadmap commitment; revisit only if users demonstrate a problem deterministic planning cannot solve.
+90-day objective | A → B → C: prove people want the product, get to 100 users, then prove first revenue.
+
+
+Decision | Final choice
+Build sequence | Combine product-validation order with the technical implementation path. Every technical stage has a product gate.
+Real-link capture | Later, after the core planning behavior is validated.
+Long-content sessions | Later, after core planning/retention validation.
+Sharing | Both: Share My Week first, shareable collections later.
+Calendar integration | Post-90-day milestone with a retention gate.
+Pricing | EUR (BGN) 5/month and EUR (BGN) 39.99/year as the initial pricing hypothesis.
+Payment validation | Public beta first; no rigid 30-user/3-buyer gate.
+AI | No planned AI stage. Only revisit if future research demonstrates a real need; if added, it must be optional and replaceable.
+Working name | Curate
+Accounts | Guest/local use first; accounts and cloud persistence after initial product validation.
+Activation | Start with 3–5–1; also measure whether 5 saves / 3 scheduled is a stronger predictor of retention.
+Planning | Time Budget + Quick Plan are built as one combined core feature.
+Sharing sequence | Share My Week first, then Share Collections.
+Public sharing | Anyone with the link can view; account required to import/save.
+Archive | Do not add yet; decide after larger-library testing.
+Priority | One simple Priority toggle.
+Quick Plan behavior | Default automatic selection plus an advanced rule selector.
+Long content before Sessions | Keep as one item; no duplicate-day workaround required.
+Analytics | Umami + first-party product events.
+Document structure | Part I: Product Strategy; Part II: Combined Validation + Build Roadmap; Part III: Technical Build Specification; Part IV: Google AI Studio prompts.
+
+
+Segment | Pain | Why Curate fits
+Visual learners / knowledge collectors | Large backlog of tabs, bookmarks, Watch Later queues, podcast episodes and books. | Visual canvas makes the backlog feel curated; calendar converts it into action.
+Knowledge workers, designers, creators, marketers, founders, engineers | Need structured time for learning and research but rarely have a realistic consumption plan. | Time Budget + calendar gives content a place in the week.
+Cosmos / Readwise / Pinterest / Are.na fans | Want calm, image-first, aesthetic tools instead of tables and project-management dashboards. | Current visual language fits; scheduling becomes the functional wedge.
+
+
+Issue | Why it matters | Final direction
+Collection is clearer than consumption | Home can be interpreted as a visual bookmarking app. | Make the save → schedule relationship explicit in the hero and empty state.
+Calendar is powerful but under-explained | Dragging cards is clear; the reason for doing so is less explicit. | Use the 3–5–1 activation path and Time Budget.
+Empty state needs purpose | Blank canvas can look unfinished. | Use “Start with 3 things you want to consume this week.”
+Completion loop is not obvious | Planning alone can reduce the product to a prettier calendar. | Add Saved → Scheduled → In Progress → Completed → Skipped and Weekly Review.
+Feature-sprawl risk | The canvas can support many directions. | Protect the core loop and gate major additions.
+
+
+Competitor/category | Strength | Curate differentiation | Pricing status
+Cosmos | Visual-first discovery and collection. | Add time-based planning and a consumption loop. | Current price should be rechecked on the official site before external use.
+Are.na | Strong visual/idea collection and networked research. | Make collected media actionable through scheduling and completion. | Current price should be rechecked.
+Readwise | Capture, highlighting, review and retrieval. | Focus on visual curation + future consumption planning rather than knowledge retention. | Current price should be rechecked.
+Pinterest | Exceptional visual discovery and saving. | Turn saved content into a personal learning/media schedule rather than a discovery feed. | Freemium/ad-supported; exact commercial comparison should be rechecked.
+Raindrop.io / bookmark managers | Excellent capture, organization and retrieval. | Make time and consumption the primary organizing layer. | Current price should be rechecked.
+
+
+Defensible wedge / Visual curation + time-aware consumption planning. Curate does not need to beat Pinterest on discovery, Readwise on notes, or a calendar on scheduling. It combines the parts they keep separate.
+
+
+Feature | Purpose | Impact | Effort | Confidence | Priority
+Messaging + empty state | Activation | 9 | 2 | 9 | Critical
+3–5–1 activation flow | Activation | 10 | 3 | 9 | Critical
+Time Budget + Quick Plan | Planning / retention | 10 | 5 | 9 | Critical
+Completion states | Retention | 9 | 3 | 9 | Very high
+Inbox filters + backlog summary | Retention | 8 | 4 | 9 | High
+Weekly Review | Retention | 8 | 4 | 8 | High
+Accounts + persistence | Trust / infrastructure | 8 | 7 | 8 | After initial validation
+Share My Week | Virality / acquisition | 8 | 6 | 8 | High
+Share Collections | Virality / acquisition | 8 | 6 | 7 | Medium
+Browser capture / faster capture | Activation / acquisition | 9 | 7 | 8 | Later
+Sessions for long items | Retention / planning | 8 | 6 | 7 | Later
+Real-link capture | Activation / data quality | 9 | 8 | 8 | Later
+Calendar integration | Retention / utility | 7 | 5 | 7 | Post-90-day gate
+Freemium entitlements | Monetization | 7 | 5 | 7 | After public beta
+AI | Optional | — | — | — | No committed stage
+
+
+Model | Pros | Cons | Decision
+Freemium subscription | Predictable recurring revenue; free users experience the core loop. | Needs clear upgrade triggers and ongoing usage. | Recommended
+Usage-based / AI credits | Aligns costs with paid AI use if AI becomes meaningful. | Conflicts with a non-AI core and adds complexity. | Do not use
+One-time / lifetime | Easy purchase decision for an indie product. | Poor fit for ongoing hosting, support and future work. | Later experiment only
+
+
+Tier | Initial scope
+Free | Up to 100 saved items; Canvas; Inbox; Day / Week / Month calendar; manual scheduling; Time Budget; Quick Plan; completion tracking.
+Pro | Unlimited saved items; unlimited collections; advanced planning controls; Weekly Review; Share My Week; Share Collections; later browser capture; future advanced features.
+
+
+Price hypothesis / EUR (BGN) 5/month or EUR (BGN) 39.99/year. This is a starting test price, not validated market willingness-to-pay.
+
+
+Channel | Why it fits | Execution
+Visual-product communities | Cosmos/Are.na/Pinterest-style users already understand curation and visual tools. | Share public weeks, public collections and before/after backlog transformations.
+Content / SEO | Strong intent around managing watch-later queues, learning calendars and content backlogs. | Publish tactical pages around turning saved content into realistic weekly schedules.
+Founder outreach / small communities | With 0 users, qualitative learning matters more than scale. | Recruit small batches of designers, marketers, creators and serious learners; observe sessions.
+
+
+Batch | Action | Goal
+1–10 | Hand-recruit people who already save too much content. Watch first sessions live or via screen recording. | Find activation friction.
+11–25 | Iterate on messaging, 3–5–1 and Time Budget. | Get consistent first-week usage.
+26–50 | Publish shareable example weeks and collections. | Test whether the visual artifact attracts sign-ups.
+51–100 | Targeted outreach to the best-performing ICP. | Measure repeat usage and identify the strongest segment.
+
+
+Referral loop / The strongest referral object is a useful public artifact, not a generic invite: “My October Marketing Watchlist”, “20 UX Research Articles I Want to Read”, or “My German A2 → B1 Study Queue”. The viewer can save it into Curate after creating an account.
+
+
+Metric | Definition | Question
+Activation | 3+ saves → 1+ scheduled → Calendar viewed. | Can a stranger reach this in under 3 minutes?
+5/3 secondary activation | 5+ saves → 3+ scheduled. | Is a stronger activation threshold a better retention predictor?
+Weekly retained users | Users who return and interact with a plan in a later week. | Does Curate create repeat behavior?
+Items completed/week | Count and duration of completed content. | Does planning translate into consumption?
+Plan-to-completion rate | Completed scheduled items / scheduled items. | Are schedules realistic?
+Paid conversion | Paid users / eligible active users. | Does the free product create natural upgrade pressure?
+Monthly churn | Paid users lost per month. | Does Curate remain useful after novelty fades?
+ARPU | Revenue / active paying users. | Is pricing aligned with perceived value?
+
+
+Risk | What matters now | Action
+AI-generated code quality | AI Studio can create duplicated components, fragile state and hidden coupling. | Keep architecture simple, reuse components, inspect data/state flow and test core paths after each change.
+Data loss / persistence | The content library and calendar are the product. | Use a clear data model, backups/versioning where possible and migration discipline.
+Security | Saved URLs and private plans may be sensitive. | Secure auth/session handling and never expose private data through public sharing.
+Platform dependency | YouTube and metadata sources can change. | Treat source URL as canonical; external metadata is enrichment.
+AI cost risk | AI could introduce unnecessary variable cost. | Core must work without AI; any future AI must be optional, rate-limited and replaceable.
+Privacy / legal | Public collections can expose data; APIs have policy restrictions. | Explicit sharing permissions, privacy defaults, clear attribution and current legal/API review before scale.
+Scale | Infinite canvas and large libraries can become expensive client-side. | Virtualize/paginate lists and stress-test larger libraries.
+Scope creep | The canvas invites feature expansion. | Use the SAVE → ORGANIZE → PLAN → CONSUME → COMPLETE test for every feature.
+
+
+Stage | Work | Gate / success metric
+1A | Fix obvious UI/product defects from screenshots: hero collision, source-field inconsistency, contrast/text size, title wrapping, type icon correctness, wordmark. | Home is clean from 1024–2560px; core screens survive theme switch and resize.
+1B | Refine hero, empty state, primary input and first-use copy. Use “Everything worth exploring. On your schedule.” | A stranger can explain what Curate does and why scheduling matters.
+1C | Run the first five-person moderated activation test. Do not wait for a complete onboarding system. | Users can add 3–5 items, schedule at least one and reach Calendar in <3 minutes.
+2 | Build Time Budget + Quick Plan together. Deterministic, transparent, user-controlled. | Users understand available vs planned time and can preview a proposed week.
+Analytics | Install Umami and first-party product events. | Events: item_added, item_planned, item_completed, activation milestone.
+
+
+Phase 1 gate / Do not proceed because the feature list is finished. Proceed because observed user friction is understood and the core planning loop is usable.
+
+
+Stage | Work | Gate / success metric
+3 | Completion states and basic progress. | Users mark planned content done and weekly completion becomes measurable.
+4 | Inbox filters, duration filters, priority toggle, unplanned summary. | A larger backlog remains navigable without turning Curate into a database.
+5 | Weekly Review. | Activated users have a clear reason to return and plan the next week.
+6 | Accounts and persistence after validation: guest mode first, then sign-in, sync, export/delete and Privacy/Terms placeholders. | Data survives browser switching; users control export and deletion.
+7 | Share My Week. | Public Week page opens without login; saving/importing requires an account. Link preview works.
+
+
+Stage | Work | Gate / success metric
+8 | Share Collections in addition to Share My Week. | At least one shared artifact produces measurable visits/sign-ups.
+9 | Refine acquisition loops: visual communities, SEO pages, founder outreach. | Reach the first 100 users and identify the best-performing ICP/channel.
+10 | Public beta first; then test pricing and simple entitlements. | First paid conversions or clear evidence that willingness-to-pay is weak.
+11 | Polish, performance, accessibility, data/privacy and onboarding from observed usage. | Core flows reliable; no known high-severity usability/security defect.
+Post-90-day gate | Calendar integration, real-link capture, browser capture, Sessions for long content. | Only start based on measured demand/retention, not because they are on the backlog.
+
+
+90-day objective / A → B → C: prove people want the product → get to 100 users → prove first revenue. The goal is not maximum feature count.
+
+
+Order | Feature | Reason
+1 | Real-link capture | Reduce the gap between the beautiful prototype and real content workflows.
+2 | Sessions for long items | Make books/courses/videos fit across multiple days without pretending the full duration happens each day.
+3 | Faster capture: multi-paste, playlist import, bookmarklet | Reduce the largest recurring capture friction once saving behavior is proven.
+4 | Calendar integration | Export/subscribe only after users show repeat planning behavior.
+5 | Optional AI, only if demanded | No default AI. No AI unless research demonstrates that deterministic planning is insufficient.
+
+
+Single most important next action / Run the five-person activation test. Give each person three things they want to watch/read, ask them to add them to Curate and create a plan without explaining the interface, and observe whether they reach 3 saves → 1 schedule → Calendar in under 3 minutes. Fix only the top observed stalls before broadening the build.
