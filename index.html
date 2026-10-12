@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Curate — Curate Your Curiosity.</title>
+    <meta name="description" content="Curate turns the videos, articles, podcasts and books you save into a realistic weekly plan. Discover more, scroll less, and make time for what you love." />
+    <meta property="og:title" content="Curate — Curate Your Curiosity." />
+    <meta property="og:description" content="Curate turns the videos, articles, podcasts and books you save into a realistic weekly plan. Discover more, scroll less, and make time for what you love." />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="/og-image.png" />
+    <meta name="twitter:image" content="/og-image.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Curate — Curate Your Curiosity." />
+    <meta name="twitter:description" content="Curate turns the videos, articles, podcasts and books you save into a realistic weekly plan. Discover more, scroll less, and make time for what you love." />
+    <link rel="icon" type="image/svg+xml" href="/logo.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+      (function() {
+        try {
+          var saved = localStorage.getItem('curatecal_dark_mode');
+          var isDark = saved !== null ? saved === 'true' : true;
+          if (isDark) {
+            document.documentElement.classList.add('dark');
+            document.documentElement.setAttribute('data-theme', 'dark');
+          } else {
+            document.documentElement.classList.remove('dark');
+            document.documentElement.setAttribute('data-theme', 'light');
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body class="antialiased bg-[#FAF9F6] dark:bg-[#0C0C0C] text-stone-900 dark:text-stone-100 selection:bg-amber-200 selection:text-stone-900">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
