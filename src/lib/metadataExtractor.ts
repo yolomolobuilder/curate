@@ -118,22 +118,29 @@ function getPlatformFromHostname(hostname: string): string {
 }
 
 // Intelligent topic detection from URL or title keywords
-export function detectTopic(titleOrUrl: string): string {
+export function detectTopic(titleOrUrl: string | undefined | null): string {
+  if (!titleOrUrl || typeof titleOrUrl !== 'string') return 'Deep Dive';
+
   const text = titleOrUrl.toLowerCase();
-  if (text.includes('marketing') || text.includes('growth') || text.includes('seo') || text.includes('ads') || text.includes('copywriting')) return 'Marketing';
-  if (text.includes('ux') || text.includes('ui') || text.includes('design') || text.includes('figma') || text.includes('typography')) return 'UX/UI';
-  if (text.includes('german') || text.includes('deutsch')) return 'German';
-  if (text.includes('english') || text.includes('grammar') || text.includes('vocabulary')) return 'English';
-  if (text.includes('health') || text.includes('sleep') || text.includes('nutrition') || text.includes('fasting') || text.includes('longevity')) return 'Health';
-  if (text.includes('fitness') || text.includes('workout') || text.includes('gym') || text.includes('strength') || text.includes('run')) return 'Fitness';
-  if (text.includes('psychology') || text.includes('cognitive') || text.includes('bias') || text.includes('behavior') || text.includes('mindset')) return 'Psychology';
-  if (text.includes('business') || text.includes('startup') || text.includes('strategy') || text.includes('venture') || text.includes('founder')) return 'Business';
-  if (text.includes('economics') || text.includes('economy') || text.includes('finance') || text.includes('investing') || text.includes('market')) return 'Economics';
-  if (text.includes('history') || text.includes('century') || text.includes('war') || text.includes('ancient') || text.includes('roman')) return 'History';
-  if (text.includes('science') || text.includes('physics') || text.includes('biology') || text.includes('neuroscience') || text.includes('quantum')) return 'Science';
-  if (text.includes('philosophy') || text.includes('stoic') || text.includes('ethics') || text.includes('nietzsche') || text.includes('epictetus')) return 'Philosophy';
-  if (text.includes('culture') || text.includes('art') || text.includes('cinema') || text.includes('music') || text.includes('literature')) return 'Culture';
-  if (text.includes('tech') || text.includes('ai') || text.includes('code') || text.includes('software') || text.includes('engineering')) return 'Technology';
+
+  const containsWord = (words: string[]) =>
+    words.some(word => new RegExp(`\\b${word}\\b`, 'i').test(text));
+
+  if (containsWord(['marketing', 'growth', 'seo', 'ads', 'copywriting'])) return 'Marketing';
+  if (containsWord(['ux', 'ui', 'design', 'figma', 'typography'])) return 'UX/UI';
+  if (containsWord(['german', 'deutsch'])) return 'German';
+  if (containsWord(['english', 'grammar', 'vocabulary'])) return 'English';
+  if (containsWord(['health', 'sleep', 'nutrition', 'fasting', 'longevity'])) return 'Health';
+  if (containsWord(['fitness', 'workout', 'gym', 'strength', 'run'])) return 'Fitness';
+  if (containsWord(['psychology', 'cognitive', 'bias', 'behavior', 'mindset'])) return 'Psychology';
+  if (containsWord(['business', 'startup', 'strategy', 'venture', 'founder'])) return 'Business';
+  if (containsWord(['economics', 'economy', 'finance', 'investing', 'market'])) return 'Economics';
+  if (containsWord(['history', 'century', 'war', 'ancient', 'roman'])) return 'History';
+  if (containsWord(['science', 'physics', 'biology', 'neuroscience', 'quantum'])) return 'Science';
+  if (containsWord(['philosophy', 'stoic', 'ethics', 'nietzsche', 'epictetus'])) return 'Philosophy';
+  if (containsWord(['culture', 'art', 'cinema', 'music', 'literature'])) return 'Culture';
+  if (containsWord(['tech', 'ai', 'code', 'software', 'engineering'])) return 'Technology';
+
   return 'Deep Dive';
 }
 
