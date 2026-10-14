@@ -18,8 +18,10 @@ import { migrateItem } from './storage';
 import { compressBase64ToCap, MAX_MEDIA_BYTES } from './mediaStorage';
 import { trackEvent } from './analytics';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim();
+// Supabase's legacy anon key and newer sb_publishable_* key are both public client keys.
+// Do not use a service_role / sb_secret_* key in this browser bundle.
+const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
 
 function getAppRedirectUrl(): string {
   // If running in development / cloud run, window.location.origin is the exact web URL
