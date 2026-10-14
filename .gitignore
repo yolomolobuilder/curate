@@ -3,3 +3,9 @@ node_modules/
 .DS_Store
 *.log
 .gemini/
+
+# Package manager lock files
+bun.lock
+bun.lockb
+yarn.lock
+pnpm-lock.yaml
