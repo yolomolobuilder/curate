@@ -17,9 +17,19 @@ import { DataStore, CurateSettings, DataSnapshot } from './dataStore';
 import { migrateItem } from './storage';
 import { compressBase64ToCap, MAX_MEDIA_BYTES } from './mediaStorage';
 import { trackEvent } from './analytics';
+import {
+  getSupabaseConfigHost,
+  getSupabaseKeyPreview,
+  isValidSupabaseConfig,
+  normalizeSupabaseConfig,
+} from './supabaseConfig';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+const rawSupabaseConfig = normalizeSupabaseConfig(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY,
+);
+const supabaseUrl = rawSupabaseConfig.url;
+const supabaseAnonKey = rawSupabaseConfig.key;
 
 function getAppRedirectUrl(): string {
   // If running in development / cloud run, window.location.origin is the exact web URL
@@ -34,7 +44,25 @@ function getAppRedirectUrl(): string {
 let clientInstance: SupabaseClient | null = null;
 
 export function isSupabaseConfigured(): boolean {
-  return Boolean(supabaseUrl && supabaseAnonKey && supabaseUrl.startsWith('https://'));
+  return isValidSupabaseConfig(rawSupabaseConfig);
+}
+
+/**
+ * Safe diagnostics for Settings > About. Never exposes the complete API key
+ * or full URL; only the host and first 12 key characters are returned.
+ */
+export function getSupabaseConfigDiagnostics(): {
+  configured: boolean;
+  urlHost: string;
+  keyPreview: string;
+  keyLength: number;
+} {
+  return {
+    configured: isSupabaseConfigured(),
+    urlHost: getSupabaseConfigHost(supabaseUrl) || 'Missing or invalid',
+    keyPreview: getSupabaseKeyPreview(supabaseAnonKey),
+    keyLength: supabaseAnonKey.length,
+  };
 }
 
 export function getSupabaseClient(): SupabaseClient | null {
