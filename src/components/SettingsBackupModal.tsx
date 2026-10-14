@@ -111,6 +111,8 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
   const [isRefreshingYouTube, setIsRefreshingYouTube] = useState(false);
   const [refreshYouTubeStatus, setRefreshYouTubeStatus] = useState<string | null>(null);
 
+  const cloudSyncDiagnostics = getSupabaseConfigDiagnostics();
+
   useEffect(() => {
     if (!isOpen) return;
     setStorageStats(getStorageUsageStats());
@@ -894,13 +896,13 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
               </p>
               <div className="mt-2 space-y-1 border-t border-stone-100 dark:border-stone-800 pt-2 text-left text-[10px] font-mono text-stone-500 dark:text-stone-400">
                 <p>
-                  Cloud sync: <span className={getSupabaseConfigDiagnostics().configured ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}>
-                    {getSupabaseConfigDiagnostics().configured ? 'configured' : 'not configured'}
+                  Cloud sync: <span className={cloudSyncDiagnostics.configured ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}>
+                    {cloudSyncDiagnostics.configured ? 'configured' : 'not configured'}
                   </span>
                 </p>
-                <p>Supabase host: {getSupabaseConfigDiagnostics().urlHost}</p>
+                <p>Supabase host: {cloudSyncDiagnostics.urlHost}</p>
                 <p>
-                  Public key: {getSupabaseConfigDiagnostics().keyPreview} · length {getSupabaseConfigDiagnostics().keyLength}
+                  Public key: {cloudSyncDiagnostics.keyPreview} · length {cloudSyncDiagnostics.keyLength}
                 </p>
               </div>
             </div>
