@@ -113,6 +113,30 @@ export function setCachedYouTubeDuration(
 }
 
 /**
+ * Saves multiple duration entries into the persistent cache in a single operation.
+ */
+export function setCachedYouTubeDurations(
+  entries: Array<{ videoId: string; durationMinutes: number | null; isLiveOrMissing?: boolean }>
+): void {
+  if (!entries || entries.length === 0) return;
+  try {
+    if (typeof localStorage === 'undefined') return;
+    const cache = getYouTubeDurationCache();
+    const now = new Date().toISOString();
+    for (const entry of entries) {
+      cache[entry.videoId] = {
+        durationMinutes: entry.durationMinutes,
+        fetchedAt: now,
+        isLiveOrMissing: entry.isLiveOrMissing || false,
+      };
+    }
+    localStorage.setItem(YT_DURATION_CACHE_KEY, JSON.stringify(cache));
+  } catch (err) {
+    console.warn('[YouTubeCache] Failed to save cache entries:', err);
+  }
+}
+
+/**
  * Clears the persistent YouTube duration cache.
  */
 export function clearYouTubeDurationCache(): void {
@@ -222,18 +246,22 @@ export async function fetchYouTubeDurationsBatch(
       }
 
       const now = new Date().toISOString();
+      const cacheEntriesToSave: Array<{ videoId: string; durationMinutes: number | null; isLiveOrMissing?: boolean }> = [];
+
       for (const id of batch) {
         const rawDuration = returnedMap.get(id);
         const parsedMinutes = parseIso8601DurationToMinutes(rawDuration);
         const isLive = !parsedMinutes;
 
-        setCachedYouTubeDuration(id, parsedMinutes, isLive);
+        cacheEntriesToSave.push({ videoId: id, durationMinutes: parsedMinutes, isLiveOrMissing: isLive });
         results.set(id, {
           durationMinutes: parsedMinutes,
           isLive,
           fetchedAt: now,
         });
       }
+
+      setCachedYouTubeDurations(cacheEntriesToSave);
     } catch (err) {
       trackEvent('duration_fetched', { source: 'youtube', ok: false });
       console.warn('[YouTube API] Network failure or blocked request:', err);
