@@ -1,7 +1,7 @@
 {
   "name": "curate",
   "main": "./worker.js",
-  "compatibility_date": "2024-02-28",
+  "compatibility_date": "2026-10-14",
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
