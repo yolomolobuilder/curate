@@ -1,132 +1,191 @@
-# Clickable Week Share Link & Pure Text-Based UI Refinement
+# Share Collections Implementation Plan
 
-Enhance the **Share My Week** experience by making the shared week link directly clickable to open in a new tab (both in the calendar week header and the share modal), while replacing all heavy button shapes, pill capsules, and footer images with pure, quiet editorial text links and clean typography.
+Curate users can curate and publish public content boards ("Collections") from their existing library, share them with rich Pinterest-style responsive masonry cards and server-rendered social previews, and import other creators' collections into their Inbox with duplicate protection.
 
-## User Review & Critical Decisions
+---
+
+### User Review & Critical Decisions
 
 > [!IMPORTANT]
-> The following design decisions were confirmed during clarification and govern the implementation:
-
-- **Confirmed Decision 1 (Clickable Link Action)**: Clicking the shared week link opens the public shared page (`/w/:id`) directly in a new tab (`target="_blank"`), while maintaining an adjacent one-click copy affordance.
-- **Confirmed Decision 2 (Affordance Placement)**: The clickable link is positioned in **both** the calendar week header (giving instant access to view/share the published week) and inside the Share My Week modal.
-- **Confirmed Decision 3 (Text-Based Styling & Anti-Shape Discipline)**: Absolutely no images in the footer, and no rounded pill capsule buttons or bulky container shapes. All footer actions, navigation, and secondary controls transition to pure quiet text links with subtle hover underlines and typographic mid-dot (`·`) separators.
-
----
-
-## 1. Overview & Core Concept
-
-- **What It Does**:
-  - **Clickable Week in Calendar Header**: In the Week view header, if a share link has been generated for the active week, the week display features an elegant, clickable text link that opens the live `/w/:id` public view in a new tab. If no link exists yet, clicking "Share Week" opens the creation modal.
-  - **Clickable Link in Share Modal**: The generated URL in `ShareWeekModal` is rendered as an interactive, clickable link opening directly in a new tab, alongside a clean "Copy" text trigger.
-  - **Pure Text-Based Footer (Public `/w/:id` Page)**: Removes heavy pill buttons (`border-radius: 9999px`), background fills, and any footer graphics. Replaces them with a quiet editorial typographic footer: the Curate wordmark followed by pure inline text links (`Plan your own week on Curate`, `Report this page`), maintaining event tracking (`share_cta_clicked`).
-  - **De-cluttered Modal & View Controls**: Simplifies status badges, item toggles, and modal actions from chunky button shapes into clean typographic text buttons adhering to the Universal Frontend Design Constitution (zero-pill discipline).
-
-- **Target Audience / Workflow**:
-  - Curate users sharing their weekly reading/watching plan with peers, colleagues, or social circles who want frictionless link access and a clean, high-taste editorial aesthetic.
+> The following architectural and UX choices have been confirmed based on the initial clarification:
+> - **Item Selection Entry Point**: Users can multi-select items directly from their Inbox or Library via interactive checkboxes and a contextual bottom floating action bar.
+> - **Public Collection Layout**: Responsive Pinterest-style masonry card grid featuring cover thumbnails, content type badges, source tags, and duration indicators.
+> - **Collection Management**: Integrated directly into the top navigation as a dedicated **"Collections"** section for fast access, link copying, SEO indexing toggles, and collection deletion.
 
 ---
 
-## 2. User Experience & Visual Design
+### 1. Overview & Core Concept
 
-### Key User Flows
-
-1. **Viewing & Opening Shared Week from Calendar**:
-   - The user navigates to the Week view.
-   - When the active week has an active public link, the week title or adjacent status indicator clearly shows a quiet, clickable link (e.g. `Shared ↗` or clickable week label).
-   - Clicking the link opens `https://domain/w/:id` in a new tab.
-   - Clicking `Share` or the settings icon opens the `ShareWeekModal` for updating snapshots or toggling privacy.
-
-2. **Managing Link Inside Share Modal**:
-   - In `ShareWeekModal`, the active link is presented as a clean, highlighted text link.
-   - Clicking the link opens `/w/:id` in a new tab.
-   - Next to it, quiet text actions (`Copy`, `Turn Off`, `Delete`) replace bulky nested button boxes.
-   - Item hide/show toggles are styled as simple text links (`Hide` / `Show`) instead of heavy gray buttons.
-
-3. **Public Shared Page Footer (`/w/:id`)**:
-   - At the bottom of the public page, there are **no images** or decorative graphics.
-   - No pill-shaped buttons with dark background fills.
-   - Instead, a minimal hairline border separates the content stream from a quiet typographic footer:
-     ```text
-     Curate · Curate Your Curiosity
-
-     Plan your own week on Curate ↗   ·   Report this page
-     Snapshot · Read-only
-     ```
-   - Clicking `Plan your own week on Curate` navigates to `/?ref=share` and fires the `share_cta_clicked` beacon.
-
-### Visual Identity & Theme Tokens
-
-- **Typography**: Editorial serif headings (`Newsreader` / serif) paired with clean geometric body sans (`Plus Jakarta Sans`) and tabular numerals for durations.
-- **Link Styling**: Plain text (`text-stone-700 dark:text-stone-300`) with subtle hover color transition (`hover:text-stone-900 dark:hover:text-white`) and underline offset (`hover:underline underline-offset-4`).
-- **Zero Pill / Anti-Slop**:
-  - Replace `rounded-full bg-emerald-500` status dots with subtle text labels: `Active` or `Inactive (410)`.
-  - Replace pill button `.plan-cta-btn` with quiet text link styling: `text-stone-900 dark:text-stone-100 underline underline-offset-4 font-medium`.
+- **What It Does**: Enables users to group up to 50 items from their Curate library into a thematic public collection board (e.g., "Deep Dives in Neuroplasticity", "Essays on Architecture & Design", "Weekend Film & Documentary Watchlist").
+- **Target Audience**: Curious knowledge workers, students, researchers, and creators who want to share curated playlists of multimedia resources with colleagues or their audience.
+- **Key Value**: Provides a shareable, beautifully formatted media board without social networking bloat (no feeds, no follower counts, no comments, no algorithmic vanity metrics), coupled with a 1-click import into personal Curate accounts.
 
 ---
 
-## 3. Key Product Decisions & Trade-Offs
+### 2. User Experience & Visual Design
 
-- **Click-to-Open vs Click-to-Copy**:
-  - *Chosen Approach*: Link text directly navigates to the page in a new window (`target="_blank"`), with an explicit text button for copying to clipboard.
-  - *Why*: Satisfies the user's explicit preference ("the link is the main thing that they may want to share. so it week should be clickable... Click to open the public shared page in new tab") while still allowing rapid link copying.
-- **Header Affordance Integration**:
-  - *Chosen Approach*: When a week has been shared, render a quiet, elegant clickable indicator directly in the week view toolbar: `Shared ↗` linking to `/w/:id`, alongside the `Share Week` modal toggle.
-  - *Why*: Avoids modifying the calendar grid layout while providing immediate one-click verification of what viewers will see.
-- **Server Rendered Footer Simplification**:
-  - *Chosen Approach*: Strip all rounded container pills and CSS button shapes from `server.ts`'s HTML generator, using pure typographic layout with semantic `<a>` tags.
-  - *Why*: Direct compliance with user guidance ("please do not add image in the footer like the attached image... the current design has too much buttons/shapes while it could be a simple text like the image attached").
+#### A. Key User Flows
+
+1. **Selection & Creation (In-App)**:
+   - User clicks **"Select"** in the Library or Inbox toolbar to enter selection mode.
+   - Multi-select checkboxes appear on items; clicking cards adds them to the selection batch.
+   - A bottom floating action bar emerges: `"[X] items selected"`, `"+ Create Collection"`, and `"Clear"`.
+   - Clicking `"+ Create Collection"` opens the **Create Collection Modal**:
+     - Title input: Max 80 characters with live counter.
+     - Description: Optional, max 300 characters, plain text only.
+     - Reorderable item list with remove pills.
+     - **"Allow search engines"** toggle switch (default: off).
+     - Account limit badge: Free accounts limited to 3 active collections and 50 items per collection.
+   - User hits **"Publish Collection"**; receives instant public link `/c/:id`, with quick actions to copy link, view public page, or close.
+
+2. **Public Viewing (`/c/:id`)**:
+   - Clean, editorial masthead in Newsreader / serif typography displaying the collection title and plain-text description.
+   - Metadata bar: Item count (`X items`), total listening/reading duration (`Yh Zm`), and quiet attribution.
+   - **Pinterest-Style Responsive Masonry Grid**:
+     - Visual cards organized into CSS masonry columns with varied vertical rhythm.
+     - Each card displays high-resolution thumbnail or type-specific fallback, item title, content type badge (`YouTube`, `Article`, `Podcast`, `Book`, etc.), source domain/channel, and duration.
+     - Direct external link icon (`↗`) opening the original URL in a new tab.
+     - **Strict Privacy**: Creator notes, completion dates, and private tags are completely excluded from the public render.
+   - **Primary Action**: Sticky or hero-adjacent **"Save to my Curate"** button.
+   - **Footer**: Curate brand signature, `"Plan your own week. Curate your curiosity."`, `"Open Curate →"` button with `?ref=collection`, a takedown notice, and a `"Report this page"` modal trigger.
+
+3. **Collection Import ("Save to my Curate")**:
+   - Clicking `"Save to my Curate"` checks for user authentication.
+   - If not signed in: Opens the sign-in/sign-up modal with an informative notice: *"An account is required to save collections to your personal Curate library."*
+   - Once authenticated:
+     - Checks user's existing items using canonical URL deduplication (for YouTube: matching 11-character video ID; for web articles/podcasts: normalized URL stripped of UTM tags).
+     - Imports all non-duplicate items directly to the user's **Inbox** (`status: 'inbox'`).
+     - Preserves original durations and `durationIsEstimate` flags.
+     - Never copies any private notes or annotations.
+     - Refetches/triggers fresh YouTube duration metadata rather than relying on stale cached values.
+     - Displays completion toast: `"Added 8 items to your Inbox (2 duplicates skipped)"`.
+
+4. **Collections Management (`Collections` Nav Tab)**:
+   - Accessible via the main top navigation alongside `Home` and `Calendar`.
+   - Displays all collections created by the current user with status pills (Active / Deactivated), search engine indexing status, item count, and creation date.
+   - Inline controls:
+     - Toggle Active / Inactive (deactivated links immediately serve HTTP 410 Gone).
+     - Toggle "Allow search engines" (switches `<meta name="robots">` between `noindex, nofollow` and `index, follow`).
+     - "Copy Link" to clipboard.
+     - "Delete" (permanently deletes record; subsequent visits return HTTP 410 Gone).
+
+#### B. Visual Identity & Anti-Slop Styling
+
+- **Typography**: Editorial serif (`Newsreader`, Georgia) for collection titles; clean geometric sans (`Plus Jakarta Sans` / system UI) for body and UI elements; tabular figures (`tabular-nums`) for all item counters and duration totals.
+- **Color Tokens**: 60-30-10 distribution utilizing Curate's warm paper canvas (`#FAF9F6` in light mode, `#0C0C0C` in dark mode), subtle stone hairline borders (`#E7E5E4` / `#292524`), and high-intent stone-900 / white primary actions.
+- **Zero-Pill Restraint**: Item cards show clean unboxed metadata with subtle typographic separators (`⏱ 24m · youtube.com ↗`).
+- **No Social Gimmicks**: Strictly zero likes, follower counts, comment threads, public user profiles, or discovery feeds.
 
 ---
 
-## 4. Technical Architecture & Data Strategy
+### 3. Key Product Decisions & Trade-Offs
 
-### Technical Architecture Diagram
+| Decision | Chosen Approach | Rationale | Alternatives Considered |
+| :--- | :--- | :--- | :--- |
+| **Public URL Structure** | `/c/:id` (128-bit hex UUID) | Clean separation from weekly shares (`/w/:id`); unguessable 32-hex ID prevents scraping. | Slug-based URLs `/c/my-title` (risk of namespace collisions and user impersonation). |
+| **Masonry Grid Engine** | CSS Column Layout (`columns-1 sm:columns-2 lg:columns-3 xl:columns-4`) with `break-inside-avoid` | Native browser performance without layout jank or heavy JavaScript Masonry libraries. | Absolute-positioned JS layout (heavy DOM reflows and bundle size penalty). |
+| **SEO & Indexing** | Default `noindex, nofollow` with user toggle | Preserves user privacy by default while providing an opt-in path for creators testing organic search traffic. | Always indexed (violates user privacy) or always noindexed (blocks creator SEO experiments). |
+| **Import Deduplication** | Dual-key canonical matching (YouTube Video ID + normalized URL) | Prevents duplicate videos even if query strings differ; prevents duplicate articles across protocol/subdomain variants. | Naive full string URL match (fails when tracking query parameters differ). |
+| **Account Gating for Imports** | Account required for import; guest creation allowed locally | Prevents spam imports, attaches saved items securely to user cloud library, and enforces the explicit prompt requirement. | Allow guest imports (risk of unauthenticated inbox pollution and loss of sync). |
+
+---
+
+### 4. Technical Architecture & Data Strategy
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Calendar Week View                       │
-│  - Week Date Range & Navigation                             │
-│  - If Week Shared: "Shared ↗" Clickable Link (New Tab)     │
-│  - "Share Week" Trigger ──► ShareWeekModal                  │
-└──────────────────────────────┬──────────────────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      ShareWeekModal                         │
-│  - Public Link Box: Direct Clickable <a> (New Tab)         │
-│  - Quiet Text Actions: "Copy" | "Turn Off" | "Delete"       │
-│  - Per-item Toggles: Minimal "Hide" / "Show" text links    │
-│  - Zero bulky card-in-card shapes                           │
-└──────────────────────────────┬──────────────────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────┐
-│             Server-Side HTML Renderer (/w/:id)              │
-│  - Server.ts: clean responsive HTML with OpenGraph tags     │
-│  - Body: Editorial Day Stream                               │
-│  - Footer: NO images, NO pill buttons                       │
-│  - Pure quiet text links with "share_cta_clicked" beacon    │
-└──────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│                              CLIENT APP                                │
+│                                                                        │
+│   TopNav ─────────────► [Collections Tab] ──► Manage User Collections  │
+│   Library / Inbox ────► [Multi-Select Bar] ─► Create Collection Modal   │
+│   Auth Gateway ───────► Require Account for 'Save to my Curate'        │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ REST API
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                              SERVER.TS                                 │
+│                                                                        │
+│   POST   /api/collections        (Validate, sanitize, rate-limit 10/hr)│
+│   PATCH  /api/collections/:id    (Toggle active, toggle SEO index)    │
+│   DELETE /api/collections/:id    (Permanent delete -> 410 Gone)        │
+│   GET    /api/collections/:id    (JSON snapshot payload for import)    │
+│   GET    /c/:id                  (Server-rendered HTML + SEO tags)     │
+│   GET    /c/:id/poster.png       (Dynamic OpenGraph preview card)      │
+│   POST   /api/report             (Process takedown & page reports)     │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                             PERSISTENCE                                │
+│                                                                        │
+│   Local Store: data/shared_collections.json                            │
+│   Cloud Store: Supabase `shared_collections` table (if configured)     │
+│   Browser: localStorage backup for offline & quick preview             │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Component & File Mapping
+#### A. Data Model
 
-1. **`src/components/CalendarGrid.tsx`**:
-   - Check local shared weeks store for active share matching current `weekStartDate`.
-   - In the week view header, display an inline clickable text link `Shared ↗` (opening `/w/:id` in `_blank`) whenever a share exists for that week.
-   - Keep the clean "Share" trigger button without changing the grid layout.
+```typescript
+export interface SharedCollectionItem {
+  id: string;
+  title: string;
+  source: string;
+  type: ContentType;
+  duration: number; // minutes
+  durationIsEstimate?: boolean;
+  coverReference?: string; // image thumbnail URL
+  url?: string;
+  canonicalUrl?: string; // normalized URL or YouTube video ID
+}
 
-2. **`src/components/ShareWeekModal.tsx`**:
-   - Update URL display: turn the link text into a direct `<a href="/w/:id" target="_blank">` element with hover underline.
-   - Refactor buttons into minimalist text-first controls (replacing nested gray pill buttons with clean text links and subtle dividers).
-   - Ensure "Hide" / "Show" controls are lightweight text triggers.
+export interface SharedCollectionRecord {
+  id: string; // 32-character hex ID
+  userId: string;
+  title: string; // max 80 characters, sanitized
+  description?: string; // max 300 characters, plain text sanitized
+  allowSearchEngines: boolean; // default: false
+  items: SharedCollectionItem[]; // max 50 items
+  isActive: boolean; // default: true; false returns 410 Gone
+  createdAt: string; // ISO 8601
+  updatedAt: string; // ISO 8601
+}
+```
 
-3. **`server.ts`**:
-   - In `renderPublicWeekHtml`, update `.page-footer` styles: remove `.plan-cta-btn` rounded pill container and dark background.
-   - Render the CTA as a refined, unboxed editorial text link: `<a href="/?ref=share" id="plan-cta" class="plan-cta-link">Plan your own week on Curate &rarr;</a>`.
-   - Ensure no footer images or unnecessary badge shapes are present.
-   - Verify OpenGraph tags and 410 Gone page match this refined aesthetic.
+#### B. Constants & Limits
 
-4. **Self-Check & Regression Suite**:
-   - Update `src/lib/selfCheck.ts` to verify snapshot integrity and link generation.
-   - Run compilation and verify dev server responsiveness on port 3000.
+```typescript
+export const COLLECTION_LIMITS = {
+  FREE_ACCOUNT_COLLECTIONS: 3,
+  MAX_ITEMS_PER_COLLECTION: 50,
+  MAX_TITLE_LENGTH: 80,
+  MAX_DESCRIPTION_LENGTH: 300,
+  RATE_LIMIT_PER_HOUR: 10,
+};
+```
+
+#### C. Deduplication Logic
+
+- **YouTube**: Regex matches standard patterns:
+  `/(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/`
+  Extracts 11-char Video ID as the deduplication key.
+- **Web URLs**: Strip query tracking keys (`utm_*`, `ref`, `fbclid`), lowercase host, normalize trailing slash.
+
+#### D. Analytics & Events
+
+- `collection_created`: Emitted when collection is published.
+- `collection_viewed`: Emitted when `/c/:id` is visited (logged server-side and client beacon).
+- `collection_saved`: Emitted when an authenticated user imports collection (`{ itemCount: number }`).
+- `collection_cta_clicked`: Emitted when public visitor clicks the footer CTA or hero CTA into the app (`?ref=collection`).
+
+#### E. Legal, Safety & Takedown
+
+- Public collection footer includes `"Report this page"` button and link to updated Terms of Service.
+- Updated `TermsOfServiceModal.tsx` includes an explicit Content Takedown & DMCA Policy section with takedown contact address (`takedown@curate.app`).
+- Server route `POST /api/report` receives report payload (collection ID, reason, reporter email) and logs it.
+
+#### F. Automated Verification Tests
+
+- **Deduplication Test**: Ensures identical YouTube IDs and canonical URLs are excluded from inbox insertion.
+- **Privacy Audit Test**: Inspects payload sent to server to guarantee no notes, takeaways, or user-private fields exist.
+- **HTTP 410 Gone Test**: Ensures deactivated or deleted collections return status 410 with the "This collection is no longer shared" view.

@@ -1,0 +1,33 @@
+[
+  {
+    "id": "1a136ddbf1eaf0582e1f512e",
+    "userId": "test-user-e2e",
+    "title": "E2E Test Architecture Collection",
+    "description": "Handpicked engineering papers and videos",
+    "items": [
+      {
+        "id": "item-1",
+        "title": "System Design 101",
+        "source": "YouTube",
+        "type": "youtube",
+        "duration": 15,
+        "durationIsEstimate": false,
+        "url": "https://youtube.com/watch?v=abc123xyz00"
+      },
+      {
+        "id": "item-2",
+        "title": "Rethinking Database Concurrency",
+        "source": "ACM",
+        "type": "article",
+        "duration": 45,
+        "durationIsEstimate": true,
+        "url": "https://acm.org/paper-1"
+      }
+    ],
+    "totalDurationMinutes": 60,
+    "allowSearchEngines": false,
+    "isActive": false,
+    "createdAt": "2026-10-13T20:04:24.478Z",
+    "updatedAt": "2026-10-13T20:04:24.507Z"
+  }
+]

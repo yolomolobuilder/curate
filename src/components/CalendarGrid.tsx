@@ -218,6 +218,20 @@ export const CalendarGrid: React.FC<CalendarGridProps> = ({
     });
   }, [weekDays, items, dayThemes]);
 
+  // Listen for public week share creations, updates, or deletions
+  const [sharesVersion, setSharesVersion] = useState(0);
+  useEffect(() => {
+    const handleSharesUpdated = () => {
+      setSharesVersion((v) => v + 1);
+    };
+    window.addEventListener('curatecal:shares_updated', handleSharesUpdated);
+    window.addEventListener('storage', handleSharesUpdated);
+    return () => {
+      window.removeEventListener('curatecal:shares_updated', handleSharesUpdated);
+      window.removeEventListener('storage', handleSharesUpdated);
+    };
+  }, []);
+
   // Check if current week has an active public share link (Top-level hook to obey Rules of Hooks)
   const activeWeekShare = useMemo(() => {
     try {
@@ -228,7 +242,7 @@ export const CalendarGrid: React.FC<CalendarGridProps> = ({
     } catch {
       return null;
     }
-  }, [weekDays]);
+  }, [weekDays, sharesVersion]);
 
   const handleDragOver = (e: React.DragEvent, dateStr: string) => {
     e.preventDefault();

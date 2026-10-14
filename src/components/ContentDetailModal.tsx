@@ -18,6 +18,8 @@ import {
   Star,
   Edit3,
   RefreshCw,
+  BookmarkPlus,
+  Layers,
 } from 'lucide-react';
 import { ContentItem, ContentStatus, ContentType, CONTENT_TYPE_CONFIG } from '../types';
 import { extractYouTubeId, refetchItemMetadata } from '../lib/metadataExtractor';
@@ -25,6 +27,7 @@ import { formatDuration } from '../lib/timeAccounting';
 import { trackEvent } from '../lib/analytics';
 import { DurationChips, DurationBadgeWithPicker } from './DurationEditor';
 import { getDataStore } from '../lib/dataStore';
+import { SharedCollectionRecord } from '../lib/collections';
 
 interface ContentDetailModalProps {
   item: ContentItem | null;
@@ -33,6 +36,9 @@ interface ContentDetailModalProps {
   onUpdate: (id: string, updates: Partial<ContentItem>) => void;
   onDelete: (id: string) => void;
   onUpdateDuration?: (id: string, durationMinutes: number) => void;
+  collections?: SharedCollectionRecord[];
+  onAddToCollection?: (collectionId: string, item: ContentItem) => void;
+  onCreateCollectionWithItem?: (item: ContentItem) => void;
 }
 
 export const ContentDetailModal: React.FC<ContentDetailModalProps> = ({
@@ -42,7 +48,12 @@ export const ContentDetailModal: React.FC<ContentDetailModalProps> = ({
   onUpdate,
   onDelete,
   onUpdateDuration,
+  collections,
+  onAddToCollection,
+  onCreateCollectionWithItem,
 }) => {
+  const [showCollectionMenu, setShowCollectionMenu] = useState(false);
+  const [addedToCollectionName, setAddedToCollectionName] = useState<string | null>(null);
   const [notes, setNotes] = useState('');
   const [keyTakeaway, setKeyTakeaway] = useState('');
   const [scheduledDate, setScheduledDate] = useState('');
@@ -788,17 +799,91 @@ export const ContentDetailModal: React.FC<ContentDetailModalProps> = ({
 
         {/* Footer */}
         <div className="px-6 py-3.5 border-t border-stone-200 dark:border-stone-800 flex items-center justify-between bg-stone-100/60 dark:bg-stone-900/60">
-          <button
-            onClick={() => handleStatusChange(isCompleted ? 'planned' : 'completed')}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
-              isCompleted
-                ? 'bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-200 border border-emerald-300'
-                : 'bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-700 text-stone-800 dark:text-stone-200 hover:bg-stone-100'
-            }`}
-          >
-            <Check className="w-4 h-4" />
-            <span>{isCompleted ? 'Completed' : 'Mark as Completed'}</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => handleStatusChange(isCompleted ? 'planned' : 'completed')}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
+                isCompleted
+                  ? 'bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-200 border border-emerald-300'
+                  : 'bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-700 text-stone-800 dark:text-stone-200 hover:bg-stone-100'
+              }`}
+            >
+              <Check className="w-4 h-4" />
+              <span>{isCompleted ? 'Completed' : 'Mark as Completed'}</span>
+            </button>
+
+            {/* Add to Collection Button & Dropdown */}
+            {item && (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowCollectionMenu(!showCollectionMenu)}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium border border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-300 bg-white dark:bg-stone-850 hover:bg-stone-50 dark:hover:bg-stone-800 transition-colors cursor-pointer"
+                  title="Add this item to a public collection board"
+                >
+                  <BookmarkPlus className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                  <span>{addedToCollectionName ? `Added to ${addedToCollectionName}!` : 'Add to Collection'}</span>
+                </button>
+
+                {showCollectionMenu && (
+                  <div className="absolute bottom-full left-0 mb-2 w-64 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl shadow-xl p-2 z-50 text-xs animate-in fade-in slide-in-from-bottom-2 duration-150">
+                    <div className="px-2 py-1.5 font-semibold text-stone-500 uppercase tracking-wider text-[10px] border-b border-stone-100 dark:border-stone-800 mb-1">
+                      Add to Collection
+                    </div>
+                    {collections && collections.filter((c) => c.isActive).length > 0 ? (
+                      <div className="max-h-48 overflow-y-auto space-y-0.5">
+                        {collections
+                          .filter((c) => c.isActive)
+                          .map((c) => {
+                            const alreadyIn = c.items.some((it) => it.id === item.id);
+                            return (
+                              <button
+                                key={c.id}
+                                type="button"
+                                onClick={() => {
+                                  if (onAddToCollection) {
+                                    onAddToCollection(c.id, item);
+                                    setAddedToCollectionName(c.title);
+                                    setTimeout(() => setAddedToCollectionName(null), 2500);
+                                    setShowCollectionMenu(false);
+                                  }
+                                }}
+                                className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-stone-100 dark:hover:bg-stone-800 flex items-center justify-between transition-colors cursor-pointer"
+                              >
+                                <span className="truncate font-medium">{c.title}</span>
+                                {alreadyIn ? (
+                                  <span className="text-[10px] text-amber-600 font-medium">In board</span>
+                                ) : (
+                                  <span className="text-[10px] text-stone-400">+ Add</span>
+                                )}
+                              </button>
+                            );
+                          })}
+                      </div>
+                    ) : (
+                      <div className="px-2 py-2 text-stone-400 text-center">
+                        No collections yet.
+                      </div>
+                    )}
+
+                    {onCreateCollectionWithItem && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowCollectionMenu(false);
+                          onCreateCollectionWithItem(item);
+                        }}
+                        className="w-full mt-1 pt-1.5 border-t border-stone-100 dark:border-stone-800 px-2.5 py-1.5 rounded-lg text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/30 text-left font-medium flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Create new collection with this item</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
           <button
             onClick={() => {

@@ -18,8 +18,8 @@ import { formatHoursMinutes } from '../lib/timeAccounting';
 import { getCustomBrandLogo, getCustomBrandName } from '../lib/brand';
 
 interface TopNavProps {
-  activeTab: 'home' | 'calendar';
-  onTabChange: (tab: 'home' | 'calendar') => void;
+  activeTab: 'home' | 'calendar' | 'collections';
+  onTabChange: (tab: 'home' | 'calendar' | 'collections') => void;
   currentDate: Date;
   view: CalendarView;
   onViewChange: (view: CalendarView) => void;
@@ -154,6 +154,16 @@ export const TopNav: React.FC<TopNavProps> = ({
               }`}
             >
               Calendar
+            </button>
+            <button
+              onClick={() => onTabChange('collections')}
+              className={`px-2.5 py-1 rounded-full transition-colors cursor-pointer ${
+                activeTab === 'collections'
+                  ? 'bg-black text-white dark:bg-white dark:text-black font-medium'
+                  : 'text-stone-500 hover:text-stone-900 dark:hover:text-stone-200'
+              }`}
+            >
+              Collections
             </button>
           </div>
         </div>

@@ -176,3 +176,8 @@ export const CONTENT_TYPE_CONFIG: Record<
     accentColor: 'text-stone-700 dark:text-stone-300',
   },
 };
+
+export const MAX_FREE_COLLECTIONS = 3;
+export const MAX_COLLECTION_ITEMS = 50;
+export const MAX_COLLECTION_TITLE_LENGTH = 80;
+export const MAX_COLLECTION_DESC_LENGTH = 300;

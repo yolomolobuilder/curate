@@ -45,6 +45,8 @@ interface InboxDrawerProps {
   isDocked?: boolean;
   onOpenQuickPlan?: (presetMinutes?: number) => void;
   onUpdateDuration?: (id: string, durationMinutes: number) => void;
+  selectedItemIds?: Set<string>;
+  onToggleSelectItem?: (id: string) => void;
 }
 
 export const InboxDrawer: React.FC<InboxDrawerProps> = ({
@@ -63,6 +65,8 @@ export const InboxDrawer: React.FC<InboxDrawerProps> = ({
   hasItems,
   isDocked = false,
   onOpenQuickPlan,
+  selectedItemIds,
+  onToggleSelectItem,
 }) => {
   // Use all items pool if provided, else fallback to inboxItems
   const allItems = useMemo(() => {
@@ -541,6 +545,8 @@ export const InboxDrawer: React.FC<InboxDrawerProps> = ({
                 onToggleComplete={onToggleComplete}
                 onTogglePriority={onTogglePriority}
                 onUpdateDuration={onUpdateDuration}
+                isSelected={selectedItemIds?.has(item.id)}
+                onToggleSelect={onToggleSelectItem}
               />
 
               {/* Quiet Quick Schedule & Action bar */}

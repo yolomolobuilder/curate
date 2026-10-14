@@ -10,6 +10,7 @@ export interface SharedWeekItem {
   coverReference?: string; // YouTube thumbnail or cover reference
   day: string; // e.g. "Monday", "Tuesday"
   dateStr?: string; // YYYY-MM-DD
+  url?: string;
 }
 
 export interface SharedWeekRecord {
@@ -166,12 +167,19 @@ export function getLocalSharedWeeks(): SharedWeekRecord[] {
   }
 }
 
+export function notifySharesChanged(): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('curatecal:shares_updated'));
+  }
+}
+
 export function saveLocalSharedWeek(record: SharedWeekRecord): void {
   if (typeof localStorage === 'undefined') return;
   try {
     const existing = getLocalSharedWeeks().filter((w) => w.id !== record.id);
     existing.unshift(record);
     localStorage.setItem(LOCAL_SHARED_WEEKS_KEY, JSON.stringify(existing));
+    notifySharesChanged();
   } catch (err) {
     console.warn('[ShareWeek] Failed to save local share:', err);
   }
@@ -182,6 +190,7 @@ export function deleteLocalSharedWeek(id: string): void {
   try {
     const updated = getLocalSharedWeeks().filter((w) => w.id !== id);
     localStorage.setItem(LOCAL_SHARED_WEEKS_KEY, JSON.stringify(updated));
+    notifySharesChanged();
   } catch (err) {
     console.warn('[ShareWeek] Failed to delete local share:', err);
   }

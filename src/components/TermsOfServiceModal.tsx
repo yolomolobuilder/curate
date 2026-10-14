@@ -117,6 +117,19 @@ export const TermsOfServiceModal: React.FC<TermsOfServiceModalProps> = ({ isOpen
             </p>
           </section>
 
+          <section className="space-y-1.5">
+            <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100">
+              7. Content Complaints & Takedown Notices
+            </h3>
+            <p>
+              {APP_NAME} respects intellectual property rights. If you believe any shared collection, weekly plan snapshot, or user content infringes upon your copyright or trademark, please contact our designated takedown agent at{' '}
+              <a href="mailto:takedown@curate.app" className="font-mono font-medium underline underline-offset-2 text-stone-900 dark:text-stone-100 hover:text-amber-600">
+                takedown@curate.app
+              </a>{' '}
+              with a description of the copyrighted work, URL of the infringing page, and your contact information. Reported content is promptly reviewed and removed in accordance with applicable notice-and-takedown procedures.
+            </p>
+          </section>
+
           <div className="pt-2 border-t border-stone-200 dark:border-stone-850 text-[11px] text-stone-400 dark:text-stone-500">
             Effective Date: <span className="font-mono">[PLACEHOLDER: October 11, 2026]</span> · Version 1.0
           </div>

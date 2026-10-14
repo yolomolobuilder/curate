@@ -39,6 +39,8 @@ interface HomePageProps {
   onOpenAddModal: (type?: ContentType) => void;
   onPlanMyWeek?: () => void;
   onUpdateDuration?: (id: string, durationMinutes: number) => void;
+  selectedItemIds?: Set<string>;
+  onToggleSelectItem?: (id: string) => void;
 }
 
 interface CategoryDefinition {
@@ -173,6 +175,8 @@ export const HomePage: React.FC<HomePageProps> = ({
   onNavigateToCalendar,
   onPlanMyWeek,
   onUpdateDuration,
+  selectedItemIds,
+  onToggleSelectItem,
 }) => {
   // Activation milestone state
   const [activation, setActivation] = useState<ActivationState>(getActivationState());
@@ -970,6 +974,8 @@ export const HomePage: React.FC<HomePageProps> = ({
                     onToggleComplete={onToggleComplete}
                     onTogglePriority={onTogglePriority}
                     onUpdateDuration={onUpdateDuration}
+                    isSelected={selectedItemIds?.has(item.id)}
+                    onToggleSelect={onToggleSelectItem}
                     variant="visual"
                     disableDrag={true}
                   />
@@ -1082,6 +1088,8 @@ export const HomePage: React.FC<HomePageProps> = ({
                             onToggleComplete={onToggleComplete}
                             onTogglePriority={onTogglePriority}
                             onUpdateDuration={onUpdateDuration}
+                            isSelected={selectedItemIds?.has(item.id)}
+                            onToggleSelect={onToggleSelectItem}
                             variant="visual"
                             disableDrag={true}
                           />
@@ -1147,6 +1155,8 @@ export const HomePage: React.FC<HomePageProps> = ({
                         onToggleComplete={onToggleComplete}
                         onTogglePriority={onTogglePriority}
                         onUpdateDuration={onUpdateDuration}
+                        isSelected={selectedItemIds?.has(item.id)}
+                        onToggleSelect={onToggleSelectItem}
                         variant="visual"
                         disableDrag={true}
                       />

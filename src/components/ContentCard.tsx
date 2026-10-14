@@ -10,6 +10,8 @@ interface ContentCardProps {
   onToggleComplete: (id: string, e: React.MouseEvent) => void;
   onTogglePriority?: (id: string, e: React.MouseEvent) => void;
   onUpdateDuration?: (id: string, durationMinutes: number) => void;
+  isSelected?: boolean;
+  onToggleSelect?: (id: string, e: React.MouseEvent) => void;
   compact?: boolean;
   variant?: 'visual' | 'text-only';
   disableDrag?: boolean;
@@ -21,6 +23,8 @@ export const ContentCard: React.FC<ContentCardProps> = ({
   onToggleComplete,
   onTogglePriority,
   onUpdateDuration,
+  isSelected = false,
+  onToggleSelect,
   compact = false,
   variant = 'visual',
   disableDrag = false,
@@ -51,6 +55,8 @@ export const ContentCard: React.FC<ContentCardProps> = ({
         className={`group relative p-2.5 rounded-lg border transition-all duration-150 select-none ${
           disableDrag ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'
         } ${
+          isSelected ? 'ring-2 ring-amber-500 border-amber-500 bg-amber-50/20 dark:bg-amber-950/20' : ''
+        } ${
           isCompleted
             ? 'bg-stone-100/50 dark:bg-stone-900/40 border-stone-200/40 dark:border-stone-850 opacity-50'
             : 'bg-white dark:bg-stone-900/90 border-stone-200/60 dark:border-stone-800/80 hover:border-stone-400 dark:hover:border-stone-600 shadow-2xs'
@@ -71,6 +77,20 @@ export const ContentCard: React.FC<ContentCardProps> = ({
           </h4>
 
           <div className="flex items-center gap-1 shrink-0">
+            {onToggleSelect && (
+              <button
+                type="button"
+                onClick={(e) => onToggleSelect(item.id, e)}
+                title={isSelected ? 'Deselect item' : 'Select for collection'}
+                className={`p-0.5 rounded-sm transition-all cursor-pointer ${
+                  isSelected
+                    ? 'text-amber-500 opacity-100 font-bold'
+                    : 'text-stone-300 dark:text-stone-700 opacity-0 group-hover:opacity-100 hover:text-amber-500'
+                }`}
+              >
+                <Check className={`w-3.5 h-3.5 ${isSelected ? 'stroke-[3]' : ''}`} />
+              </button>
+            )}
             {onTogglePriority && (
               <button
                 type="button"
@@ -130,7 +150,11 @@ export const ContentCard: React.FC<ContentCardProps> = ({
       }`}
     >
       <div
-        className={`relative w-full aspect-16/10 rounded-lg sm:rounded-xl overflow-hidden bg-stone-100 dark:bg-stone-900 border border-stone-200/50 dark:border-stone-800/60 transition-all duration-300 group-hover:shadow-md ${
+        className={`relative w-full aspect-16/10 rounded-lg sm:rounded-xl overflow-hidden bg-stone-100 dark:bg-stone-900 border transition-all duration-300 group-hover:shadow-md ${
+          isSelected
+            ? 'ring-2 ring-amber-500 border-amber-500 shadow-md'
+            : 'border-stone-200/50 dark:border-stone-800/60'
+        } ${
           compact ? 'shadow-2xs' : 'group-hover:scale-[1.015]'
         }`}
       >
@@ -153,6 +177,24 @@ export const ContentCard: React.FC<ContentCardProps> = ({
 
         <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none" />
 
+        {/* Selection Toggle */}
+        {onToggleSelect && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleSelect(item.id, e);
+            }}
+            title={isSelected ? 'Deselect item' : 'Select for collection'}
+            className={`absolute top-2 left-2 z-10 w-6 h-6 rounded-full flex items-center justify-center transition-all duration-200 cursor-pointer ${
+              isSelected
+                ? 'bg-amber-500 text-white opacity-100 scale-100 shadow-sm ring-2 ring-white dark:ring-stone-900'
+                : 'bg-black/35 hover:bg-black/80 text-white/90 opacity-40 hover:opacity-100 group-hover:opacity-100 backdrop-blur-xs hover:scale-110 border border-white/30'
+            }`}
+          >
+            <Check className={`w-3.5 h-3.5 ${isSelected ? 'stroke-[3]' : ''}`} />
+          </button>
+        )}
 
         {/* Priority Star Toggle (Requirement 3: user answered direct star icon on cards) */}
         {onTogglePriority && (
@@ -163,7 +205,7 @@ export const ContentCard: React.FC<ContentCardProps> = ({
               onTogglePriority(item.id, e);
             }}
             title={item.isPriority ? 'High priority item (click to remove)' : 'Mark as high priority'}
-            className={`absolute top-2 left-2 w-6 h-6 rounded-full flex items-center justify-center transition-all duration-200 cursor-pointer ${
+            className={`absolute top-2 ${onToggleSelect ? 'left-9' : 'left-2'} w-6 h-6 rounded-full flex items-center justify-center transition-all duration-200 cursor-pointer ${
               item.isPriority
                 ? 'bg-amber-400 text-stone-950 opacity-100 scale-100 shadow-sm'
                 : 'bg-black/50 hover:bg-black/80 text-white opacity-0 group-hover:opacity-100 backdrop-blur-xs hover:scale-110'

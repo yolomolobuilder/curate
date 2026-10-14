@@ -55,6 +55,20 @@ import { WeeklyReviewModal } from './components/WeeklyReviewModal';
 import { ShareWeekModal } from './components/ShareWeekModal';
 import { AnalyticsNoticeBanner } from './components/AnalyticsNoticeBanner';
 import { trackEvent } from './lib/analytics';
+import { MultiSelectToolbar } from './components/MultiSelectToolbar';
+import { CreateCollectionModal } from './components/CreateCollectionModal';
+import { CollectionsView } from './components/CollectionsView';
+import {
+  getStoredCollections,
+  importCollectionItemsToInbox,
+  fetchCollectionFromServer,
+  updateCollectionOnServer,
+  createCollectionSnapshot,
+  SharedCollectionRecord,
+} from './lib/collections';
+import { fetchYouTubeDurationsBatch } from './lib/youtubeDuration';
+import { extractYouTubeId } from './lib/metadataExtractor';
+import { Check } from 'lucide-react';
 
 export default function App() {
   const [items, setItems] = useState<ContentItem[]>(() => {
@@ -73,11 +87,98 @@ export default function App() {
     trackEvent('app_opened');
   }, []);
 
-  // Primary tab: 'home' (Cosmos discovery & visual library) vs 'calendar' (schedule)
-  const [activeTab, setActiveTab] = useState<'home' | 'calendar'>(() => {
-    // If user already has scheduled items, they can see calendar, but home is great first experience
+  // Primary tab: 'home' (Cosmos discovery & visual library), 'calendar' (schedule), or 'collections' (public boards)
+  const [activeTab, setActiveTab] = useState<'home' | 'calendar' | 'collections'>(() => {
     return 'home';
   });
+
+  // Collections & Multi-Select state
+  const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set());
+  const [isCreateCollectionOpen, setIsCreateCollectionOpen] = useState(false);
+  const [editingCollection, setEditingCollection] = useState<SharedCollectionRecord | null>(null);
+  const [userCollections, setUserCollections] = useState<SharedCollectionRecord[]>(() => getStoredCollections());
+  const [collectionToastMessage, setCollectionToastMessage] = useState<string | null>(null);
+
+  const handleToggleSelectItem = (id: string) => {
+    setSelectedItemIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        if (next.size >= 50) return next;
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const handleClearSelection = () => {
+    setSelectedItemIds(new Set());
+  };
+
+  const loadUserCollections = () => {
+    setUserCollections(getStoredCollections());
+  };
+
+  const handleAddItemToCollection = async (collectionId: string, itemToAdd: ContentItem) => {
+    try {
+      const col = userCollections.find((c) => c.id === collectionId);
+      if (!col) return;
+
+      const alreadyExists = col.items.some((i) => i.id === itemToAdd.id);
+      if (alreadyExists) {
+        setCollectionToastMessage(`"${itemToAdd.title}" is already in "${col.title}".`);
+        return;
+      }
+
+      if (col.items.length >= 50) {
+        setCollectionToastMessage(`Collection "${col.title}" is at the maximum limit of 50 items.`);
+        return;
+      }
+
+      const updatedRawItems: ContentItem[] = [
+        ...col.items.map((ci) => {
+          const match = items.find((i) => i.id === ci.id);
+          return (
+            match || {
+              id: ci.id,
+              title: ci.title,
+              source: ci.source,
+              contentType: (ci.type as ContentType) || 'other',
+              durationMinutes: ci.duration,
+              durationIsEstimate: ci.durationIsEstimate,
+              thumbnailUrl: ci.coverReference || '',
+              url: ci.url,
+              status: 'inbox' as const,
+              createdAt: col.createdAt,
+            }
+          );
+        }),
+        itemToAdd,
+      ];
+
+      const snapshot = createCollectionSnapshot({
+        id: col.id,
+        userId: col.userId || currentUser?.id || 'guest-user',
+        title: col.title,
+        description: col.description,
+        displayName: col.displayName || (currentUser?.email ? currentUser.email.split('@')[0] : undefined),
+        items: updatedRawItems,
+        allowSearchEngines: col.allowSearchEngines,
+      });
+
+      await updateCollectionOnServer(col.id, {
+        items: snapshot.items as any,
+        totalDurationMinutes: snapshot.totalDurationMinutes,
+      });
+
+      loadUserCollections();
+      setCollectionToastMessage(`Added "${itemToAdd.title}" to collection "${col.title}"!`);
+    } catch (err) {
+      console.error('Failed to add item to collection:', err);
+      setCollectionToastMessage('Failed to add item to collection.');
+    }
+  };
 
   // Date navigation
   const [currentDate, setCurrentDate] = useState<Date>(() => new Date());
@@ -155,6 +256,81 @@ export default function App() {
     });
     return () => unsubscribe();
   }, []);
+
+  const performImportCollection = async (collectionId: string) => {
+    try {
+      const col = await fetchCollectionFromServer(collectionId);
+      if (!col || !col.items || col.items.length === 0) {
+        setCollectionToastMessage('Collection not found or has no items.');
+        return;
+      }
+
+      const currentItems = getDataStore().loadAllSync ? getDataStore().loadAllSync!().items : getStoredItems();
+      const { newItems, skippedDuplicatesCount } = importCollectionItemsToInbox(col.items, currentItems);
+
+      if (newItems.length > 0) {
+        const updated = [...newItems, ...currentItems];
+        setItems(updated);
+        saveStoredItems(updated);
+
+        // Refetch YouTube durations fresh for newly imported items (do not copy cached YouTube data)
+        const ytIds = newItems
+          .filter((i) => i.contentType === 'youtube' && i.url)
+          .map((i) => extractYouTubeId(i.url || ''))
+          .filter((id): id is string => Boolean(id));
+        if (ytIds.length > 0) {
+          fetchYouTubeDurationsBatch(ytIds).catch(() => {});
+        }
+
+        // Requirement 7: collection_saved event with itemCount
+        trackEvent('collection_saved', { itemCount: newItems.length });
+
+        setCollectionToastMessage(
+          `Added ${newItems.length} ${newItems.length === 1 ? 'item' : 'items'} to your Inbox${
+            skippedDuplicatesCount > 0 ? ` (${skippedDuplicatesCount} duplicates skipped)` : ''
+          }`
+        );
+
+        // Open Inbox so user sees the newly imported items
+        setIsInboxOpen(true);
+      } else {
+        setCollectionToastMessage(
+          `All ${col.items.length} items in this collection already exist in your library.`
+        );
+      }
+
+      // Clean URL params and clear pending storage
+      if (typeof window !== 'undefined') {
+        const cleanUrl = window.location.pathname;
+        window.history.replaceState({}, '', cleanUrl);
+        sessionStorage.removeItem('curate_pending_import_collection');
+      }
+    } catch (err) {
+      console.error('Failed to import collection:', err);
+      setCollectionToastMessage('Failed to save collection to your Inbox.');
+    }
+  };
+
+  // Check URL params on startup or auth state change
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const urlParams = new URLSearchParams(window.location.search);
+    const importId =
+      urlParams.get('import_collection') ||
+      urlParams.get('collection') ||
+      sessionStorage.getItem('curate_pending_import_collection');
+
+    if (!importId) return;
+
+    if (!currentUser) {
+      // Requirement 2: 'Save to my Curate' requires an account.
+      sessionStorage.setItem('curate_pending_import_collection', importId);
+      setCollectionToastMessage('Please sign in or create an account to save this collection to your Inbox.');
+      setIsAuthModalOpen(true);
+    } else {
+      performImportCollection(importId);
+    }
+  }, [currentUser]);
 
   // Desktop notice for viewports below 900px
   const [isDesktopNoticeDismissed, setIsDesktopNoticeDismissed] = useState<boolean>(() => {
@@ -640,7 +816,7 @@ export default function App() {
   };
 
   // Tab change with activation calendar viewed tracking
-  const handleTabChange = (tab: 'home' | 'calendar') => {
+  const handleTabChange = (tab: 'home' | 'calendar' | 'collections') => {
     setActiveTab(tab);
     if (tab === 'calendar') {
       recordActivationCalendarViewed('nav');
@@ -816,8 +992,10 @@ export default function App() {
                 setAddModalInitialDate(undefined);
                 setIsAddModalOpen(true);
               }}
+              selectedItemIds={selectedItemIds}
+              onToggleSelectItem={handleToggleSelectItem}
             />
-          ) : (
+          ) : activeTab === 'calendar' ? (
             <div className="flex-1 py-2">
               <CalendarGrid
                 currentDate={currentDate}
@@ -841,6 +1019,26 @@ export default function App() {
                 onUpdateDuration={handleUpdateDuration}
               />
             </div>
+          ) : (
+            <CollectionsView
+              collections={userCollections}
+              onOpenCreateModal={() => {
+                setEditingCollection(null);
+                setIsCreateCollectionOpen(true);
+              }}
+              onRefreshCollections={loadUserCollections}
+              onEditCollection={(col) => {
+                setEditingCollection(col);
+                setIsCreateCollectionOpen(true);
+              }}
+              onOpenAddContent={() => {
+                setAddModalInitialType(undefined);
+                setAddModalInitialDate(undefined);
+                setIsAddModalOpen(true);
+              }}
+              onNavigateToInbox={() => setIsInboxOpen(true)}
+              onNavigateToHome={() => handleTabChange('home')}
+            />
           )}
         </main>
 
@@ -864,6 +1062,8 @@ export default function App() {
             hasItems={items.length > 0}
             onOpenQuickPlan={handleOpenQuickPlan}
             onUpdateDuration={handleUpdateDuration}
+            selectedItemIds={selectedItemIds}
+            onToggleSelectItem={handleToggleSelectItem}
           />
         )}
       </div>
@@ -888,6 +1088,13 @@ export default function App() {
         onUpdate={handleUpdateItem}
         onDelete={handleDeleteItem}
         onUpdateDuration={handleUpdateDuration}
+        collections={userCollections}
+        onAddToCollection={handleAddItemToCollection}
+        onCreateCollectionWithItem={(item) => {
+          setSelectedItemIds(new Set([item.id]));
+          setEditingCollection(null);
+          setIsCreateCollectionOpen(true);
+        }}
       />
 
       {/* Search Modal */}
@@ -1109,6 +1316,63 @@ export default function App() {
         isOpen={isTermsModalOpen}
         onClose={() => setIsTermsModalOpen(false)}
       />
+
+      {/* Floating Multi-Select Toolbar */}
+      <MultiSelectToolbar
+        selectedCount={selectedItemIds.size}
+        onClearSelection={handleClearSelection}
+        onCreateCollection={() => setIsCreateCollectionOpen(true)}
+      />
+
+      {/* Create / Edit Public Collection Modal */}
+      <CreateCollectionModal
+        isOpen={isCreateCollectionOpen}
+        onClose={() => {
+          setIsCreateCollectionOpen(false);
+          setEditingCollection(null);
+          handleClearSelection();
+        }}
+        selectedItems={items.filter((it) => selectedItemIds.has(it.id))}
+        allItems={items}
+        userCollectionsCount={userCollections.filter((c) => c.isActive).length}
+        userId={currentUser?.id}
+        displayName={currentUser?.email ? currentUser.email.split('@')[0] : undefined}
+        editingCollection={editingCollection}
+        onCollectionCreated={(col) => {
+          loadUserCollections();
+          handleClearSelection();
+        }}
+        onCollectionUpdated={(col) => {
+          loadUserCollections();
+          handleClearSelection();
+        }}
+        onAddNewLibraryItem={(itemData) => {
+          const newItem: ContentItem = {
+            ...itemData,
+            id: 'item-' + Date.now().toString(16),
+            createdAt: new Date().toISOString(),
+          };
+          const updated = [newItem, ...items];
+          setItems(updated);
+          saveStoredItems(updated);
+          return newItem;
+        }}
+      />
+
+      {/* Toast Notification Banner */}
+      {collectionToastMessage && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2.5 px-4 py-3 rounded-2xl bg-stone-900 text-white dark:bg-white dark:text-stone-900 shadow-xl border border-stone-800 dark:border-stone-200 text-xs font-medium animate-in fade-in slide-in-from-bottom-2 duration-200">
+          <Check className="w-4 h-4 text-emerald-400 dark:text-emerald-600 shrink-0" />
+          <span>{collectionToastMessage}</span>
+          <button
+            onClick={() => setCollectionToastMessage(null)}
+            className="ml-2 text-stone-400 hover:text-white dark:hover:text-stone-900 p-0.5"
+            title="Dismiss"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* First-visit Privacy & Analytics Notice Banner */}
       <AnalyticsNoticeBanner />
