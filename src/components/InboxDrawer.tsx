@@ -15,10 +15,10 @@ import { ContentCard } from './ContentCard';
 import { getTodayStr, getTomorrowStr } from '../lib/dateUtils';
 import { formatHoursMinutes, getEstimatedDuration } from '../lib/timeAccounting';
 
-export type InboxStatusFilter = 'unscheduled' | 'scheduled' | 'completed' | 'all';
-export type InboxTypeFilter = 'all' | 'video' | 'article' | 'podcast' | 'book';
-export type InboxDurationFilter = 'all' | '<15m' | '15-30m' | '30-60m' | '1h+';
-export type InboxSortOption = 'newest' | 'oldest' | 'shortest' | 'longest' | 'priority';
+type InboxStatusFilter = 'unscheduled' | 'scheduled' | 'completed' | 'all';
+type InboxTypeFilter = 'all' | 'video' | 'article' | 'podcast' | 'book';
+type InboxDurationFilter = 'all' | '<15m' | '15-30m' | '30-60m' | '1h+';
+type InboxSortOption = 'newest' | 'oldest' | 'shortest' | 'longest' | 'priority';
 
 export const SPECIFIED_INBOX_TOPICS = [
   'Marketing',
