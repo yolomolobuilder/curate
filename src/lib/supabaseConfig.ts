@@ -51,7 +51,9 @@ export function isValidSupabaseUrl(url: string): boolean {
 }
 
 export function isValidSupabasePublicKey(key: string): boolean {
-  if (/^sb_publishable_[A-Za-z0-9_-]+$/.test(key)) return true;
+  // Treat modern publishable keys as opaque strings; don't couple validation
+  // to their internal format as Supabase may evolve it.
+  if (key.startsWith('sb_publishable_') && key.length > 'sb_publishable_'.length) return true;
 
   // Legacy anon keys are JWTs with three non-empty base64url segments.
   // Intentionally do not accept sb_secret_* or service_role keys.
