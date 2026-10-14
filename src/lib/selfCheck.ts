@@ -110,6 +110,7 @@ import {
   setAnalyticsDisabled,
   ANALYTICS_OFF_STORAGE_KEY,
 } from './analyticsConfig';
+import { normalizeSupabaseConfig, isValidSupabaseConfig } from './supabaseConfig';
 
 export interface TestResult {
   id: string;
@@ -3004,6 +3005,74 @@ export async function runSelfCheckTests(): Promise<SelfCheckSuiteResult> {
       passed: false,
       message: err.message || String(err),
     });
+  }
+
+
+  // =========================================================================
+  // Tests 29–33: Supabase configuration accepts safe public keys and rejects
+  // malformed/missing configuration before initializing the auth client.
+  // =========================================================================
+  const supabaseConfigCases = [
+    {
+      id: 'test-29-supabase-publishable-key',
+      name: 'Supabase config accepts sb_publishable_* public keys',
+      url: 'https://project-ref.supabase.co',
+      key: 'sb_publishable_test_key_1234567890',
+      expected: true,
+    },
+    {
+      id: 'test-30-supabase-legacy-anon-key',
+      name: 'Supabase config accepts legacy anon JWT keys',
+      url: 'https://project-ref.supabase.co',
+      key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiJ9.signature',
+      expected: true,
+    },
+    {
+      id: 'test-31-supabase-missing-key',
+      name: 'Supabase config rejects a missing public key',
+      url: 'https://project-ref.supabase.co',
+      key: '',
+      expected: false,
+    },
+    {
+      id: 'test-32-supabase-trims-whitespace-and-quotes',
+      name: 'Supabase config trims surrounding whitespace and quotes',
+      url: '  "https://project-ref.supabase.co"  ',
+      key: "  'sb_publishable_test_key_1234567890'  ",
+      expected: true,
+    },
+    {
+      id: 'test-33-supabase-url-trailing-slash',
+      name: 'Supabase config rejects a project URL with a trailing slash',
+      url: 'https://project-ref.supabase.co/',
+      key: 'sb_publishable_test_key_1234567890',
+      expected: false,
+    },
+  ];
+
+  for (const testCase of supabaseConfigCases) {
+    try {
+      const config = normalizeSupabaseConfig(testCase.url, testCase.key);
+      const actual = isValidSupabaseConfig(config);
+      if (actual !== testCase.expected) {
+        throw new Error(
+          `Expected configured=${testCase.expected}, got ${actual} (host=${config.url}, keyLength=${config.key.length})`,
+        );
+      }
+      results.push({
+        id: testCase.id,
+        name: testCase.name,
+        passed: true,
+        message: `Verified: configuration result is ${actual ? 'configured' : 'not configured'}.`,
+      });
+    } catch (err: any) {
+      results.push({
+        id: testCase.id,
+        name: testCase.name,
+        passed: false,
+        message: err.message || String(err),
+      });
+    }
   }
 
 
