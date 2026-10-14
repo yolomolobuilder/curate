@@ -33,6 +33,8 @@ Clean `npm install` runs smoothly without any special flags or peer-dependency c
 
 ### Run Development Server
 
+Use npm only. Do not create or commit bun.lock, bun.lockb, yarn.lock or pnpm-lock.yaml.
+
 ```bash
 npm run dev
 ```
