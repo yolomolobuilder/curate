@@ -3,3 +3,8 @@ node_modules/
 .DS_Store
 *.log
 .gemini/
+bun.lock
+bun.lockb
+yarn.lock
+pnpm-lock.yaml
+data/

@@ -24,6 +24,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { APP_VERSION, BUILD_DATE_STRING } from '../lib/buildInfo';
+import { getSupabaseConfigDiagnostics } from '../lib/cloudStore';
 import {
   refreshAllEstimatedYouTubeItems,
   getYouTubeApiKey,
@@ -109,6 +110,8 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
   const [logCount, setLogCount] = useState(() => getStoredAnalyticsEvents().length);
   const [isRefreshingYouTube, setIsRefreshingYouTube] = useState(false);
   const [refreshYouTubeStatus, setRefreshYouTubeStatus] = useState<string | null>(null);
+
+  const cloudSyncDiagnostics = getSupabaseConfigDiagnostics();
 
   useEffect(() => {
     if (!isOpen) return;
@@ -891,6 +894,17 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
               <p className="text-[11px] font-mono text-stone-600 dark:text-stone-400">
                 Version {APP_VERSION} · built {BUILD_DATE_STRING}
               </p>
+              <div className="mt-2 space-y-1 border-t border-stone-100 dark:border-stone-800 pt-2 text-left text-[10px] font-mono text-stone-500 dark:text-stone-400">
+                <p>
+                  Cloud sync: <span className={cloudSyncDiagnostics.configured ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}>
+                    {cloudSyncDiagnostics.configured ? 'configured' : 'not configured'}
+                  </span>
+                </p>
+                <p>Supabase host: {cloudSyncDiagnostics.urlHost}</p>
+                <p>
+                  Public key: {cloudSyncDiagnostics.keyPreview} · length {cloudSyncDiagnostics.keyLength}
+                </p>
+              </div>
             </div>
           </div>
         </div>
