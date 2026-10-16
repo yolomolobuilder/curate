@@ -27,7 +27,7 @@ import {
   StorageFailureInfo,
   exportBackupJson,
 } from './lib/storage';
-import { getDataStore } from './lib/dataStore';
+import { getDataStore, setActiveDataStore, localStore } from './lib/dataStore';
 import { TopNav } from './components/TopNav';
 import { HomePage } from './components/HomePage';
 import { CalendarGrid } from './components/CalendarGrid';
@@ -227,31 +227,42 @@ export default function App() {
   useEffect(() => {
     const unsubscribe = cloudStore.onAuthStateChange(async (user) => {
       setCurrentUser(user);
+
       if (user) {
-        // If user just signed in and had local items, prompt for migration if not already migrated
-        const localItems = getDataStore().loadAllSync ? getDataStore().loadAllSync!().items : getStoredItems();
+        // 1. Export local state BEFORE switching to cloudStore
+        const localSnapshot = await localStore.exportSnapshot();
+        const localItems = localStore.loadAllSync().items;
+
+        // 2. Now it is safe to set the active store to cloudStore
+        setActiveDataStore(cloudStore);
+
+        // 3. Handle guest migration if this is their first sign-in
         const nonSampleCount = localItems.filter((i) => !i.isSample).length;
         const migrationDone = localStorage.getItem('curate_migrated_' + user.id);
+
         if (nonSampleCount > 0 && !migrationDone) {
           setIsMigrationModalOpen(true);
         } else {
-          // Perform cloud load and snapshot merge
+          // Perform cloud load and merge with local
           try {
-            const cloudData = await cloudStore.loadAll();
-            if (cloudData.items.length > 0) {
-              const localSnapshot = await getDataStore().exportSnapshot();
-              const cloudSnapshot = await cloudStore.exportSnapshot();
-              const merge = mergeSnapshots(localSnapshot, cloudSnapshot);
-              if (merge.conflicts.length > 0) {
-                setSyncConflicts(merge.conflicts);
-              }
-              setItems(merge.mergedSnapshot.items);
-              saveStoredItems(merge.mergedSnapshot.items);
+            const cloudSnapshot = await cloudStore.exportSnapshot();
+            const merge = mergeSnapshots(localSnapshot, cloudSnapshot);
+            if (merge.conflicts.length > 0) {
+              setSyncConflicts(merge.conflicts);
             }
+            // 4. Update UI state and push merged result to active store (cloudStore)
+            setItems(merge.mergedSnapshot.items);
+            await cloudStore.saveItems(merge.mergedSnapshot.items);
           } catch (err) {
             console.warn('[CloudSync] Initial sync error:', err);
           }
         }
+      } else {
+        // Logged out: fall back to local store
+        setActiveDataStore(localStore);
+        // Refresh items from local storage to hide cloud data
+        const localData = localStore.loadAllSync();
+        setItems(localData.items);
       }
     });
     return () => unsubscribe();
