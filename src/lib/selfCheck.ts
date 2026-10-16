@@ -1659,7 +1659,7 @@ export async function runSelfCheckTests(): Promise<SelfCheckSuiteResult> {
   try {
     // 1. Mock window.umami
     let umamiCalls: { name: string; props?: Record<string, unknown> }[] = [];
-    (globalThis as any).window = (globalThis as any).window || {};
+    if (!(globalThis as any).window) { (globalThis as any).window = {}; }
     if (!(globalThis as any).window.dispatchEvent) {
       (globalThis as any).window.dispatchEvent = () => true;
     }
