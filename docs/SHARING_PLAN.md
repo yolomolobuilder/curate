@@ -1,19 +1,24 @@
 # Cloudflare Worker & Supabase Architecture Plan: Share My Week & Share Collections
 
-This plan details the replacement of the Express backend (`server.ts`) and local JSON persistence (`data/`) with a TypeScript Cloudflare Worker entrypoint integrated with Supabase for **Share My Week** and **Share Collections**.
+This plan details replacing the Express backend (`server.ts`) and local JSON persistence (`data/`) with a TypeScript Cloudflare Worker entrypoint integrated with Supabase for **Share My Week** and **Share Collections**.
+
+This document is for architectural planning only. No code or deletions are performed in this PR.
 
 ---
 
 ## 1. Overview & Architecture Strategy
 
-- **Static Assets & SPA**: Cloudflare Workers serve static frontend assets built by Vite (`dist/`).
-- **Routing**: `wrangler.jsonc` routes `/api/*`, `/w/*`, and `/c/*` directly to the Cloudflare Worker entrypoint before static assets or SPA fallback handling.
+- **Static Assets & SPA Routing in Cloudflare Workers**:
+  - Cloudflare's Asset Router normally handles static files in `dist/`. When `not_found_handling: "single-page-application"` is set, any URL not matching a physical static file (such as `/w/abc123hex` or `/c/def456hex`) is served `index.html` by default before reaching the Worker fetch handler.
+  - To ensure the Worker executes and handles dynamic public HTML rendering and API endpoints, `wrangler.jsonc` specifies `assets.run_worker_first: ["/api/*", "/w/*", "/c/*"]`.
+  - For all other requests (e.g. static JS/CSS bundles or root `/`), the Worker delegates to `env.ASSETS.fetch(request)`.
 - **Data Access & Security Model**:
-  - **No Public SELECT Policies**: Zero public read policies on `shared_weeks`, `collections`, and `collection_items`.
-  - **Owner Operations**: Authenticated users write/modify data using their JWT access token via Supabase client with RLS (`auth.uid() = user_id`). Quotas (max 3 active shared weeks, max 3 active collections, max 50 items each) are enforced in database policies/triggers.
-  - **Public Snapshot Reads**: Public access to active shared weeks (`/w/:id`) and collections (`/c/:id`) is provided strictly via database `SECURITY DEFINER` RPC functions (`get_shared_week(p_id)` and `get_shared_collection(p_id)`). These functions execute with `SET search_path = ''`, return snapshot columns for an exact ID only when `is_active = true`, and are granted to `anon` and `authenticated`. No listing functions exist.
-  - **No Service-Role Key Needed**: The Cloudflare Worker uses `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` only.
-- **Authentication**: Worker verifies user tokens by calling `supabase.auth.getUser(token)` with `SUPABASE_PUBLISHABLE_KEY`. Local JWKS verification is documented as a future latency optimization.
+  - **Zero Public SELECT Policies**: Tables `shared_weeks`, `collections`, `collection_items`, and `share_creation_logs` have Row-Level Security (RLS) enabled with NO public `SELECT` policies.
+  - **Owner Writes & Operations**: Authenticated owners perform updates and deactivations using their Supabase JWT access token (`auth.uid() = user_id`).
+  - **Atomic RPC Creations**: Share creation (`create_shared_week`) and collection creation (`create_collection`) are executed via `SECURITY DEFINER` RPC functions. These functions atomically verify per-user creation rate limits (max 10/hour), enforce quota limits (max 3 active shared weeks, max 3 active collections, max 50 items each), log the creation event in `share_creation_logs`, generate a 128-bit cryptographically random hex ID server-side (`encode(gen_random_bytes(16), 'hex')`), and perform the insertion.
+  - **Public Reads via RPC**: Public access to active shared weeks (`/w/:id`) and collections (`/c/:id`) is provided exclusively via `SECURITY DEFINER` RPC functions (`get_shared_week(p_id)` and `get_shared_collection(p_id)`). Executed with `SET search_path = ''`, they return snapshot columns for an exact ID only when `is_active = true`, granted to `anon` and `authenticated`. No listing functions exist.
+  - **No Service-Role Key Needed**: The Worker uses `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` exclusively.
+- **Authentication**: Worker verifies user tokens via `supabase.auth.getUser(token)` using `SUPABASE_PUBLISHABLE_KEY`. Local JWKS signature verification is noted as a future latency optimization.
 
 ---
 
@@ -22,16 +27,81 @@ This plan details the replacement of the Express backend (`server.ts`) and local
 Migrations must be applied in exact numerical order:
 
 ### Migration `002_share_my_week.sql` (Corrected In-Place)
-*Note: Corrected in-place because it has never been applied to any environment.*
+*Note: Corrected in-place because it has never been applied in production.*
 - **Table**: `public.shared_weeks`
-  - Columns: `id` (text, primary key - 32 char random hex), `user_id` (uuid references auth.users), `week_start_date` (text), `week_end_date` (text), `week_label` (text), `display_name` (text, max 40 chars sanitized), `total_planned_minutes` (integer), `items` (jsonb array of sanitized items: title, source, type, duration, coverReference, day, dateStr - **NEVER** notes or internal URLs), `is_active` (boolean, default true), `created_at` (timestamptz), `updated_at` (timestamptz).
-- **RLS Policies**:
-  - Enable RLS on `shared_weeks`.
-  - `SELECT`: `auth.uid() = user_id` (NO public SELECT policy).
-  - `INSERT`: `auth.uid() = user_id` WITH CHECK (`auth.uid() = user_id` AND `(SELECT count(*) FROM shared_weeks WHERE user_id = auth.uid() AND is_active = true) < 3`).
-  - `UPDATE`: `auth.uid() = user_id`.
-  - `DELETE`: `auth.uid() = user_id`.
-- **Public Read RPC**:
+  - Columns: `id` (text PRIMARY KEY - 32 char random hex), `user_id` (uuid REFERENCES auth.users ON DELETE CASCADE), `week_start_date` (text), `week_end_date` (text), `week_label` (text), `display_name` (text max 40), `total_planned_minutes` (integer), `items` (jsonb array of sanitized items: `title`, `source`, `type`, `duration`, `coverReference`, `day`, `dateStr` - **NEVER** private notes or internal URLs), `is_active` (boolean DEFAULT true), `created_at` (timestamptz DEFAULT now()), `updated_at` (timestamptz DEFAULT now()).
+- **Creation Logging Table**:
+  - `public.share_creation_logs`: `id` (uuid PRIMARY KEY DEFAULT gen_random_uuid()), `user_id` (uuid REFERENCES auth.users ON DELETE CASCADE), `created_at` (timestamptz DEFAULT now()).
+  - **RLS Enforced**: Enabled RLS. Owner policy: `auth.uid() = user_id`. No public policies.
+- **RLS Policies on `shared_weeks`**:
+  - `SELECT`: `auth.uid() = user_id` (No public SELECT policy).
+  - `INSERT`: Allowed only via `create_shared_week` RPC or owner `auth.uid() = user_id`.
+  - `UPDATE`, `DELETE`: `auth.uid() = user_id`.
+- **Atomic Creation RPC (`create_shared_week`)**:
+  ```sql
+  CREATE OR REPLACE FUNCTION public.create_shared_week(
+    p_week_start_date text,
+    p_week_end_date text,
+    p_week_label text,
+    p_display_name text,
+    p_total_planned_minutes integer,
+    p_items jsonb
+  )
+  RETURNS jsonb
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = ''
+  AS $$
+  DECLARE
+    v_user_id uuid := auth.uid();
+    v_recent_creations integer;
+    v_active_shares integer;
+    v_new_id text;
+  BEGIN
+    IF v_user_id IS NULL THEN
+      RAISE EXCEPTION 'Not authenticated' USING ERRCODE = '42501';
+    END IF;
+
+    -- Rate Limit: Max 10 creations per hour
+    SELECT count(*) INTO v_recent_creations
+    FROM public.share_creation_logs
+    WHERE user_id = v_user_id AND created_at > now() - interval '1 hour';
+
+    IF v_recent_creations >= 10 THEN
+      RAISE EXCEPTION 'Rate limit exceeded: Max 10 share links per hour.' USING ERRCODE = 'P0001';
+    END IF;
+
+    -- Quota: Max 3 active shared weeks
+    SELECT count(*) INTO v_active_shares
+    FROM public.shared_weeks
+    WHERE user_id = v_user_id AND is_active = true;
+
+    IF v_active_shares >= 3 THEN
+      RAISE EXCEPTION 'Active link quota exceeded: Free accounts may keep up to 3 active links.' USING ERRCODE = 'P0002';
+    END IF;
+
+    -- Server-side 128-bit random hex ID generation (32 chars)
+    v_new_id := encode(gen_random_bytes(16), 'hex');
+
+    -- Insert snapshot
+    INSERT INTO public.shared_weeks (
+      id, user_id, week_start_date, week_end_date, week_label,
+      display_name, total_planned_minutes, items, is_active, created_at, updated_at
+    ) VALUES (
+      v_new_id, v_user_id, p_week_start_date, p_week_end_date, p_week_label,
+      substring(trim(p_display_name) from 1 for 40), p_total_planned_minutes, p_items, true, now(), now()
+    );
+
+    -- Log creation event
+    INSERT INTO public.share_creation_logs (user_id, created_at) VALUES (v_user_id, now());
+
+    RETURN jsonb_build_object('id', v_new_id, 'success', true);
+  END;
+  $$;
+
+  GRANT EXECUTE ON FUNCTION public.create_shared_week TO authenticated;
+  ```
+- **Public Read RPC (`get_shared_week`)**:
   ```sql
   CREATE OR REPLACE FUNCTION public.get_shared_week(p_id text)
   RETURNS TABLE (
@@ -62,27 +132,113 @@ Migrations must be applied in exact numerical order:
   ```
 
 ### Migration `003_item_tombstones.sql` (Separate Sync Task)
-- Tracks soft-deletes/tombstones for client item sync across devices.
+- Manages soft-deletes/tombstones for cross-device item sync.
 
 ### Migration `004_collections_and_collection_items.sql`
-- **Tables**: `public.collections` and `public.collection_items`
-  - `collections`: `id` (text, primary key), `user_id` (uuid references auth.users), `title` (text max 80), `description` (text max 300), `display_name` (text max 40), `allow_search_engines` (boolean default false), `is_active` (boolean default true), `total_duration_minutes` (integer), `created_at`, `updated_at`.
-  - `collection_items`: `id` (text, primary key), `collection_id` (text references public.collections on delete cascade), `title` (text), `source` (text), `type` (text), `duration` (integer), `duration_is_estimate` (boolean), `cover_reference` (text), `url` (text), `canonical_url` (text), `youtube_id` (text), `position` (integer). **NEVER** stores notes or private metadata.
-- **Quota Enforcements & RLS Policies**:
-  - Max 3 active collections per user enforced on INSERT in RLS or trigger (`count(*) < 3`).
-  - Max 50 items per collection enforced on INSERT in `collection_items`.
-  - `SELECT` on `collections` & `collection_items`: Only `auth.uid() = user_id`.
-  - Owner `INSERT`, `UPDATE`, `DELETE`: `auth.uid() = user_id`.
-- **Creation Rate Limit Table & Function (DB-Level)**:
+- **Tables**:
+  - `public.collections`: `id` (text PRIMARY KEY), `user_id` (uuid REFERENCES auth.users ON DELETE CASCADE), `title` (text max 80), `description` (text max 300), `display_name` (text max 40), `allow_search_engines` (boolean DEFAULT false), `is_active` (boolean DEFAULT true), `total_duration_minutes` (integer), `created_at`, `updated_at`.
+  - `public.collection_items`: `id` (text PRIMARY KEY), `collection_id` (text REFERENCES public.collections ON DELETE CASCADE), `title` (text), `source` (text), `type` (text), `duration` (integer), `duration_is_estimate` (boolean), `cover_reference` (text), `url` (text), `canonical_url` (text), `youtube_id` (text), `position` (integer). **NEVER** stores private notes or metadata.
+- **RLS & Security**: RLS enabled on both tables. `SELECT`, `UPDATE`, `DELETE`: `auth.uid() = user_id`. No public SELECT policies.
+- **Atomic Creation RPC (`create_collection`)**:
   ```sql
-  CREATE TABLE IF NOT EXISTS public.share_creation_logs (
-    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-    created_at timestamptz NOT NULL DEFAULT now()
-  );
-  CREATE INDEX idx_share_creation_logs_user_time ON public.share_creation_logs(user_id, created_at DESC);
+  CREATE OR REPLACE FUNCTION public.create_collection(
+    p_title text,
+    p_description text,
+    p_display_name text,
+    p_allow_search_engines boolean,
+    p_items jsonb
+  )
+  RETURNS jsonb
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = ''
+  AS $$
+  DECLARE
+    v_user_id uuid := auth.uid();
+    v_recent_creations integer;
+    v_active_collections integer;
+    v_item_count integer;
+    v_new_id text;
+    v_total_dur integer := 0;
+    v_elem jsonb;
+    v_idx integer := 0;
+  BEGIN
+    IF v_user_id IS NULL THEN
+      RAISE EXCEPTION 'Not authenticated' USING ERRCODE = '42501';
+    END IF;
+
+    v_item_count := jsonb_array_length(p_items);
+    IF v_item_count > 50 THEN
+      RAISE EXCEPTION 'Item limit exceeded: Collections may contain at most 50 items.' USING ERRCODE = 'P0003';
+    END IF;
+
+    -- Rate Limit: Max 10 per hour
+    SELECT count(*) INTO v_recent_creations
+    FROM public.share_creation_logs
+    WHERE user_id = v_user_id AND created_at > now() - interval '1 hour';
+
+    IF v_recent_creations >= 10 THEN
+      RAISE EXCEPTION 'Rate limit exceeded: Max 10 share links/collections per hour.' USING ERRCODE = 'P0001';
+    END IF;
+
+    -- Quota: Max 3 active collections
+    SELECT count(*) INTO v_active_collections
+    FROM public.collections
+    WHERE user_id = v_user_id AND is_active = true;
+
+    IF v_active_collections >= 3 THEN
+      RAISE EXCEPTION 'Collection quota exceeded: Free accounts may keep up to 3 active collections.' USING ERRCODE = 'P0004';
+    END IF;
+
+    v_new_id := encode(gen_random_bytes(16), 'hex');
+
+    -- Insert collection header
+    INSERT INTO public.collections (
+      id, user_id, title, description, display_name, allow_search_engines,
+      is_active, total_duration_minutes, created_at, updated_at
+    ) VALUES (
+      v_new_id, v_user_id,
+      substring(trim(p_title) from 1 for 80),
+      substring(trim(p_description) from 1 for 300),
+      substring(trim(p_display_name) from 1 for 40),
+      COALESCE(p_allow_search_engines, false),
+      true, 0, now(), now()
+    );
+
+    -- Insert collection items
+    FOR v_elem IN SELECT * FROM jsonb_array_elements(p_items) LOOP
+      v_idx := v_idx + 1;
+      v_total_dur := v_total_dur + COALESCE((v_elem->>'duration')::integer, 0);
+
+      INSERT INTO public.collection_items (
+        id, collection_id, title, source, type, duration, duration_is_estimate,
+        cover_reference, url, canonical_url, youtube_id, position
+      ) VALUES (
+        COALESCE(v_elem->>'id', encode(gen_random_bytes(16), 'hex')),
+        v_new_id,
+        COALESCE(v_elem->>'title', 'Untitled'),
+        COALESCE(v_elem->>'source', 'Curate'),
+        COALESCE(v_elem->>'type', 'other'),
+        COALESCE((v_elem->>'duration')::integer, 0),
+        COALESCE((v_elem->>'durationIsEstimate')::boolean, false),
+        v_elem->>'coverReference',
+        v_elem->>'url',
+        v_elem->>'canonicalUrl',
+        v_elem->>'youtubeId',
+        v_idx
+      );
+    END LOOP;
+
+    UPDATE public.collections SET total_duration_minutes = v_total_dur WHERE id = v_new_id;
+    INSERT INTO public.share_creation_logs (user_id, created_at) VALUES (v_user_id, now());
+
+    RETURN jsonb_build_object('id', v_new_id, 'success', true);
+  END;
+  $$;
+
+  GRANT EXECUTE ON FUNCTION public.create_collection TO authenticated;
   ```
-- **Public Collection Read RPC**:
+- **Public Collection Read RPC (`get_shared_collection`)**:
   ```sql
   CREATE OR REPLACE FUNCTION public.get_shared_collection(p_id text)
   RETURNS jsonb
@@ -117,8 +273,7 @@ Migrations must be applied in exact numerical order:
         'canonicalUrl', i.canonical_url,
         'youtubeId', i.youtube_id
       ) ORDER BY i.position ASC
-    )
-    INTO v_items
+    ) INTO v_items
     FROM public.collection_items i
     WHERE i.collection_id = p_id;
 
@@ -143,56 +298,48 @@ Migrations must be applied in exact numerical order:
 
 ## 3. Rate Limiting Strategy
 
-1. **Per-User Creation Limit (10 per hour)**:
-   - Enforced in database upon creation POST requests (`/api/share`, `/api/collections`).
-   - The API checks `SELECT count(*) FROM share_creation_logs WHERE user_id = auth.uid() AND created_at > now() - interval '1 hour'`. If `>= 10`, returns HTTP 429.
+1. **Per-User Creation Rate Limit (10/hour)**:
+   - Atomically enforced inside `create_shared_week` and `create_collection` RPCs by counting rows in `share_creation_logs` for `auth.uid()` in the preceding 60 minutes. Returns exception `P0001` (HTTP 429 in client) if exceeded.
 2. **Per-IP Public Page Rate Limit**:
-   - **Chosen Method**: Cloudflare Workers Rate Limiting binding (`ratelimit` binding in `wrangler.jsonc`), which provides native 100 req/min edge protection without database load.
-   - **Fallback**: If running on a Cloudflare plan without Workers Rate Limiting bindings enabled, Cloudflare WAF Rate Limiting rules are configured in the Cloudflare Dashboard targeting `/w/*` and `/c/*`.
+   - **Chosen Method**: Cloudflare Workers Rate Limiting binding (`PUBLIC_RATE_LIMITER` binding in `wrangler.jsonc`), providing 100 req/min edge protection without querying Postgres.
+   - **Fallback**: Cloudflare Dashboard WAF Rate Limiting rules targeting `/w/*` and `/c/*` if bindings are unavailable on the Cloudflare plan.
 
 ---
 
-## 4. Worker Routes & Middleware
+## 4. Worker Routes, HTML Rendering & Security Headers
 
-The Worker entrypoint (`src/worker/index.ts` replacing `worker.js`) handles:
-
-### API Endpoints
-- `POST /api/share`: Authenticates Bearer token -> checks DB creation log rate limit -> validates input -> saves `shared_weeks` -> logs creation. Returns 201 with URL.
-- `PATCH /api/share/:id`: Authenticates Bearer token -> updates `shared_weeks` if owner (`auth.uid() = user_id`).
-- `DELETE /api/share/:id`: Authenticates Bearer token -> deletes or deactivates `shared_weeks` if owner.
+### API Routes
+- `POST /api/share`: Extracts Bearer token -> calls `supabase.auth.getUser(token)` -> executes `create_shared_week` RPC -> returns 201 with `{ id, url: "${APP_URL}/w/${id}" }`.
+- `PATCH /api/share/:id`: Authenticates -> updates `shared_weeks` via Supabase client with RLS.
+- `DELETE /api/share/:id`: Authenticates -> sets `is_active = false` via RLS.
 - `GET /api/share/:id`: Calls `get_shared_week(id)` RPC.
-- `POST /api/collections`: Authenticates Bearer token -> checks rate limit & 50-item limit -> sanitizes title (max 80) & description (max 300) -> saves `collections` and `collection_items`. Returns 201 with URL.
-- `PATCH /api/collections/:id`: Authenticates Bearer token -> updates collection if owner.
-- `DELETE /api/collections/:id`: Authenticates Bearer token -> sets `is_active = false` (ensuring subsequent public GETs return HTTP 410 Gone).
-- `GET /api/collections/:id`: Calls `get_shared_collection(id)` RPC. If deactivated (`is_active = false`), returns 410.
-- `POST /api/analytics/event`: Public beacon endpoint for anonymous telemetry (`share_viewed`, `collection_viewed`, `share_cta_clicked`).
+- `POST /api/collections`: Extracts Bearer token -> calls `create_collection` RPC -> returns 201 with `{ id, url: "${APP_URL}/c/${id}" }`.
+- `PATCH /api/collections/:id`: Authenticates -> updates collection via RLS.
+- `DELETE /api/collections/:id`: Authenticates -> sets `is_active = false`.
+- `GET /api/collections/:id`: Calls `get_shared_collection(id)` RPC. Returns 410 if deactivated.
 
-### Public Server-Rendered HTML Routes
-- `GET /w/:id`:
-  - Validates `id` format (alphanumeric/hex, max 64 chars).
-  - Calls `get_shared_week(id)` RPC using publishable key client.
-  - If null / deactivated: Returns **HTTP 410 Gone** rendered HTML page.
-  - If active: Returns 200 HTML page with:
-    - Escaped output (HTML entity encoding for title, display name, items).
-    - Open Graph & Twitter meta tags built dynamically using `APP_URL` (`${APP_URL}/w/${id}`).
-    - Open Graph image tag pointing to `${APP_URL}/og-image.png`.
-    - `Robots` meta tag & header: `X-Robots-Tag: noindex, nofollow`.
-    - Strict Security Headers:
-      - `Cache-Control: public, max-age=300, s-maxage=600`
-      - `Referrer-Policy: no-referrer`
-      - `X-Content-Type-Options: nosniff`
-      - `Content-Security-Policy: default-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self' 'unsafe-inline'; connect-src 'self' ${SUPABASE_URL};`
-- `GET /c/:id`:
-  - Validates `id` format.
-  - Calls `get_shared_collection(id)` RPC.
-  - If deactivated: Returns **HTTP 410 Gone** page.
-  - If active: Returns 200 HTML page with Pinterest-style responsive masonry card grid layout.
-  - If `allow_search_engines` is true, omits `noindex` and outputs `<meta name="robots" content="index, follow" />`.
-  - Same strict security headers and Open Graph metadata using `APP_URL`.
+### Public Server-Rendered Pages (`GET /w/:id` and `GET /c/:id`)
+- **ID Validation**: Validates ID matches `^[a-f0-9]{32}$` (128-bit hex). Returns 404 for malformed IDs.
+- **RPC Invocation**: Calls `get_shared_week` or `get_shared_collection`.
+- **410 Gone vs 404 Not Found Decision**:
+  - If the ID does not exist in the database: Returns **HTTP 404 Not Found**.
+  - If the record exists but `is_active = false`: Returns **HTTP 410 Gone** with the user-facing message: *"This week/collection is no longer shared. The owner has deactivated or removed this link."*
+- **Caching & Deactivation Delay**:
+  - `Cache-Control: public, max-age=60, s-maxage=60`
+  - *Trade-off*: Setting `max-age` to 60 seconds balances edge performance while guaranteeing that when an owner turns off or deactivates a share link, the deactivation takes effect globally within at most 60 seconds.
+- **Page Elements & Links**:
+  - **Plan Your Own Week**: Header button linking to `${APP_URL}/?ref=share`.
+  - **Report This Page**: Footer mailto link: `mailto:support@curate.app?subject=Report%20Shared%20Page%20${id}`.
+  - **Save to My Curate Import Flow**: Collection pages contain a link: `${APP_URL}/?import_collection=${id}&ref=collection`. When clicked, the SPA frontend detects `import_collection`, fetches the public JSON snapshot via `get_shared_collection(id)`, and populates the user's local Inbox or Collection builder.
+- **Strict Content Security Policy & Headers**:
+  - `Content-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://img.youtube.com https://i.ytimg.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self';`
+  - `X-Robots-Tag: noindex, nofollow` (omitted on collections if `allow_search_engines = true`).
+  - `Referrer-Policy: no-referrer`
+  - `X-Content-Type-Options: nosniff`
 
 ---
 
-## 5. Environment Variables & Wrangler Configuration
+## 5. Wrangler & Environment Variables Configuration
 
 ### `wrangler.jsonc` Setup
 ```jsonc
@@ -203,79 +350,91 @@ The Worker entrypoint (`src/worker/index.ts` replacing `worker.js`) handles:
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
-    "not_found_handling": "single-page-application"
+    "not_found_handling": "single-page-application",
+    "run_worker_first": [
+      "/api/*",
+      "/w/*",
+      "/c/*"
+    ]
   },
   "vars": {
-    "SUPABASE_URL": "https://<your-project-ref>.supabase.co",
-    "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_...",
-    "APP_URL": "https://curate.app"
+    "SUPABASE_URL": "",
+    "SUPABASE_PUBLISHABLE_KEY": "",
+    "APP_URL": ""
   },
   "ratelimits": [
     {
       "binding": "PUBLIC_RATE_LIMITER",
       "namespace_id": "public_pages_limiter",
-      "simple": { "limit": 100, "period": 60 }
+      "simple": {
+        "limit": 100,
+        "period": 60
+      }
     }
   ],
   "previews": {}
 }
 ```
 
-### Secrets to set in Cloudflare (if needed)
-- No secret keys are required in the Worker because all database access uses the Publishable key + JWT token / RLS / RPCs.
+### Environment Variable Synchronization
+- In `wrangler.jsonc`, `vars` contains empty placeholders (`""`).
+- Production values are set via Cloudflare Dashboard / `wrangler secret`.
+- Local development values are defined in `.dev.vars` (e.g. `APP_URL=http://localhost:8787`).
+- **Sync with Frontend (`VITE_APP_URL`)**: `VITE_APP_URL` in `.env` is supplied to Vite during build time for client-side absolute URL generation, while `APP_URL` is read at runtime by the Worker. Both point to the root canonical origin (e.g. `https://curate.app`).
 
 ---
 
-## 6. Frontend Wiring & Cleanup Plan
+## 6. Frontend Integration & Local Development
 
-1. **Frontend Integration (`src/lib/sharing.ts` or API client)**:
-   - Call `/api/share` and `/api/collections` relative endpoints (same-origin).
-   - Pass the user's Supabase session access token in `Authorization: Bearer <token>` header.
-   - Show user-friendly error toasts on 429 Rate Limit or 400 Quota Exceeded responses.
-2. **Server & Data Directory Removal**:
-   - `server.ts` and `data/` directory will be removed completely in the execution PR following plan approval.
-   - `package.json` scripts updated:
-     - `"dev": "vite"`
-     - `"build": "tsc --noEmit && vite build"`
+1. **Local Worker Development**:
+   - Dev dependencies include `@cloudflare/workers-types` and `wrangler`.
+   - Command `npm run preview` executes `wrangler dev` to run the Worker and static asset router locally on `http://localhost:8787`.
+   - `package.json` scripts remain unchanged:
+     - `"build": "vite build"`
+     - `"lint": "tsc --noEmit"`
      - `"preview": "wrangler dev"`
+2. **Frontend Wiring**:
+   - API calls target same-origin `/api/share` and `/api/collections`.
+   - On HTTP 429 or 400 (quota/rate limit exceptions), the UI displays user-friendly error toasts.
+3. **Legacy Cleanup**:
+   - `server.ts` and `data/` directory will be deleted in the implementation PR following plan approval.
 
 ---
 
-## 7. Comprehensive Test Plan (Including Injection Cases)
+## 7. Verification & Test Plan
 
 1. **HTML & XSS Injection Verification**:
-   - Injection payloads in titles, display names, and descriptions (e.g. `<script>alert(1)</script>`, `<img src=x onerror=alert(1)>`, `"><svg onload=alert(1)>`).
-   - Verify all rendered values in `/w/:id` and `/c/:id` HTML are safely escaped and plain text only.
-2. **Shell Metacharacter Safety**:
-   - Inputs containing shell metacharacters (`$(id)`, `` `id` ``, `; rm -rf /`, `' OR '1'='1`, `\"`, `\\`) must render verbatim as plain text strings without triggering shell execution or SQL injection.
-3. **Authentication & Authorization**:
-   - Unauthenticated request to POST/PATCH/DELETE `/api/share` -> HTTP 401 Unauthorized.
-   - Attempting to PATCH or DELETE another user's share with a valid token from User B -> HTTP 403 / 404.
-   - Expired JWT token -> HTTP 401 Unauthorized.
-   - Anonymous API calls attempting `SELECT * FROM shared_weeks` via Supabase REST API directly -> Empty array / HTTP 401/403 (verifying no public SELECT policies).
-4. **Data Isolation & Sanitization**:
-   - Private item fields (e.g., private notes, personal user metadata) -> Verify they are **never** included in snapshot payloads or rendered HTML.
-   - Invalid `id` format (e.g. path traversal attempts `/w/../../etc/passwd` or excessive length) -> HTTP 400 / 404.
-5. **Deactivation & HTTP 410 Gone**:
-   - Deactivating a week or collection -> Subsequent GET `/w/:id` and GET `/c/:id` return **HTTP 410 Gone** with the deactivated message page.
+   - Automated Worker tests (`src/worker/__tests__/escaping.test.ts`) sending payloads: `<script>alert(1)</script>`, `<img src=x onerror=alert(1)>`, `"><svg/onload=alert(1)>`. Verify rendered HTML escapes `<` to `&lt;`, `>` to `&gt;`, `"` to `&quot;`.
+2. **Shell Metacharacter Verification**:
+   - Input strings containing `$(id)`, `` `id` ``, `; rm -rf /`, `' OR '1'='1`, `\"`, `\\` verified to render strictly as verbatim plain text.
+3. **Manual Two-Account RLS Test Script (`supabase/tests/004_rls_sharing_test.sql`)**:
+   - Uses `tests.create_supabase_user` and `tests.authenticate_as`.
+   - Verifies User A cannot read, update, or delete User B's `shared_weeks` or `collections` via direct API or SQL.
+   - Verifies `anon` role receives zero rows querying `shared_weeks` directly.
+   - Verifies `get_shared_week` returns rows for active IDs and empty for deactivated IDs.
+4. **HTTP 410 vs 404 Tests**:
+   - Non-existent ID -> 404 Not Found.
+   - Deactivated ID (`is_active = false`) -> 410 Gone.
+5. **Rate Limit & Quota Tests**:
+   - 4th share creation attempt -> Error toast "Active link quota exceeded".
+   - 11th creation attempt in 1 hour -> Error toast "Rate limit exceeded".
 
 ---
 
 ## 8. Open Questions
 
-1. *Cloudflare Workers Rate Limiting Plan*: Does the deployment target a Paid Cloudflare Workers plan supporting `ratelimit` bindings in `wrangler.jsonc`, or should default Cloudflare Dashboard WAF rules be used? (Plan defaults to `ratelimit` binding with WAF fallback instructions).
-2. *Dynamic Social Image Generation*: Static `public/og-image.png` is planned initially. Is a future Cloudflare Worker HTML-Canvas / SVG renderer for dynamic OG images desired in a later phase?
+1. *Cloudflare Rate Limiting Plan*: Is Cloudflare Workers Rate Limiting binding enabled on the production plan, or should Cloudflare WAF rules be configured in the dashboard? (Plan configures the binding with fallback to WAF).
 
 ---
 
-## 9. Estimated Hours per Step
+## 9. Realistic Estimated Hours
 
 | Step | Description | Estimated Hours |
 |---|---|---|
-| **Step 1** | Supabase Migrations (`002_share_my_week.sql` corrected, `004_collections.sql`, RPC functions `get_shared_week` & `get_shared_collection`, rate limit table) | 2.5 hrs |
-| **Step 2** | Cloudflare Worker Entrypoint & API Routes (`/api/share`, `/api/collections`, `/api/analytics`) with JWT token verification via `getUser` | 3.5 hrs |
-| **Step 3** | Worker HTML Renderers (`/w/:id`, `/c/:id`) with HTML escaping, Open Graph tags, HTTP 410 Gone logic, and security headers | 3.0 hrs |
-| **Step 4** | Frontend API Client Wiring & Toast Handling for quotas/rate limits | 2.0 hrs |
-| **Step 5** | Removal of `server.ts` & `data/`, `wrangler.jsonc` update, and build script adjustments | 1.0 hr |
-| **Step 6** | Execution of Security & Injection Test Suite (XSS, Shell metacharacters, RLS isolation, HTTP 410 verification) | 2.0 hrs |
-| **Total** | | **14.0 hrs** |
+| **Step 1: Database Migrations & RPCs** | Correct `002_share_my_week.sql`, write `004_collections.sql`, `create_shared_week` & `create_collection` RPCs with 128-bit hex generation, quota & 10/hr rate limit checks, `share_creation_logs` with RLS, public RPCs `get_shared_week` & `get_shared_collection` | 3.5 hrs |
+| **Step 2: Cloudflare Worker Core & API Routes** | TypeScript Worker entrypoint (`src/worker/index.ts`), token verification via `getUser`, `/api/share` and `/api/collections` endpoints, `wrangler.jsonc` `run_worker_first` config | 4.0 hrs |
+| **Step 3: Worker HTML Rendering & Security Headers** | HTML renderers for `/w/:id` and `/c/:id`, strict CSP (`script-src 'none'`), 410 Gone vs 404 logic, `Cache-Control: max-age=60`, 'Report this page' and 'Plan your own week' links | 3.5 hrs |
+| **Step 4: Frontend API Integration & Import Flow** | Wire frontend API calls, token headers, error toasts for quotas/rate limits, collection import flow wiring | 2.5 hrs |
+| **Step 5: Automated & Manual Security Test Suite** | Write automated Worker HTML escaping tests, `supabase/tests/004_rls_sharing_test.sql` two-account script, XSS & metacharacter verification | 3.0 hrs |
+| **Step 6: Config Validation, Cleanup & E2E Verification** | Remove `server.ts` & `data/`, validate `wrangler.jsonc` assets routing, local `wrangler dev` testing, security review | 2.5 hrs |
+| **Total** | | **19.0 hrs** |
