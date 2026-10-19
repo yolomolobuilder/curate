@@ -15,17 +15,17 @@ This document is for architectural planning only. No code or deletions are perfo
 - **Data Access & Security Model**:
   - **Zero Public SELECT Policies**: Tables `shared_weeks`, `collections`, `collection_items`, and `share_creation_logs` have Row-Level Security (RLS) enabled with NO public `SELECT` policies.
   - **Public-Read Policy Transition**: The existing `supabase/migrations/002_share_my_week.sql` in `main` currently allows direct client inserts and public `SELECT` reads (`USING (is_active = true)`). In this architecture, direct public `SELECT` access on tables is completely eliminated and transitioned to `SECURITY DEFINER` RPCs (`get_shared_week` and `get_shared_collection`).
-  - **Creation-Path & Direct INSERT Disallowance**: Direct client `INSERT` on `shared_weeks`, `collections`, and `collection_items` is prohibited via RLS (`WITH CHECK (false)`). All creations must flow through `SECURITY DEFINER` RPCs (`create_shared_week` and `create_collection`) to prevent users from bypassing creation rate limits or quotas via direct REST API calls. The frontend must be updated to invoke these creation RPCs before applying the migration.
+  - **Creation-Path & Direct INSERT Disallowance**: Direct client `INSERT` on `shared_weeks`, `collections`, and `collection_items` is prohibited via RLS (`WITH CHECK (false)`). All creations must flow through `SECURITY DEFINER` RPCs (`create_shared_week` and `create_collection`) to prevent users from bypassing creation rate limits or quotas via direct REST API calls.
   - **Owner Updates & Deletions**: Authenticated owners retain direct `UPDATE` (for toggling `is_active = false` or updating display settings) and `DELETE` via RLS (`auth.uid() = user_id`).
   - **Parent-Derived Authorization**: `collection_items` has no `user_id` column; authorization for owner operations is strictly derived via parent collection ownership: `collection_id IN (SELECT id FROM public.collections WHERE user_id = auth.uid())`.
   - **Concurrency-Safe Atomic Creations**:
     - `create_shared_week` and `create_collection` RPCs acquire an advisory lock at transaction start: `PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('user_share_lock:' || v_user_id::text));`
-    - This serializes creation attempts per user, preventing race conditions on quotas (max 3 active shared weeks, max 3 active collections) and enforcing a combined rate limit (max 10 total creations/hour across both features).
+    - Serializes creation attempts per user, preventing race conditions on quotas (max 3 active shared weeks, max 3 active collections) and enforcing a combined rate limit (max 10 total creations/hour across both features).
     - Failed/rolled-back transactions automatically release the lock and undo rate-limit logging.
     - Server-side 128-bit random hex IDs (`pg_catalog.encode(pg_catalog.gen_random_bytes(16), 'hex')`) are generated inside the RPC.
-  - **Server-Side Snapshot Sanitization & Collection URLs**:
-    - Creation RPCs explicitly validate inputs (checking non-null `p_items` array, JSON types, item counts <= 50, and string length bounds; raising `ERRCODE = '22023'` on malformed input) and construct an allowlisted snapshot payload.
-    - **Collection Content URLs Policy**: For collections, public item content URLs (`url`, `canonicalUrl`, `youtubeId`) are intentionally included in the public snapshot to enable public bookmarking and preview features. Private notes, internal app URLs, user metadata, or unallowlisted fields are strictly stripped server-side.
+  - **Server-Side Snapshot Sanitization & Collection URL Validation**:
+    - Creation RPCs explicitly validate inputs (checking non-null `p_items` array, JSON types, item counts <= 50, and field types; raising `ERRCODE = '22023'` on malformed input rather than silently casting or coercing values) and construct an allowlisted snapshot payload.
+    - **Collection Content URLs Policy**: For collections, public item content URLs (`url`, `canonicalUrl`, `youtubeId`) are intentionally included in the public snapshot to enable public bookmarking and preview features. Server-side validation requires URL schemes to be `http://` or `https://`, rejects internal/private application origins, and validates `youtubeId` format (`^[a-zA-Z0-9_-]{11}$`). Private notes, internal app URLs, user metadata, or unallowlisted fields are strictly stripped server-side.
   - **Public Reads via Status-Aware RPCs**:
     - `/w/:id` and `/c/:id` call `SECURITY DEFINER` RPCs `get_shared_week(p_id)` and `get_shared_collection(p_id)`.
     - Returns `{ "status": "not_found" }` if ID is missing (Worker serves HTTP 404).
@@ -41,7 +41,8 @@ This document is for architectural planning only. No code or deletions are perfo
 
 Migrations must be applied in exact numerical order:
 
-### Migration `002_share_my_week.sql` (Corrected In-Place)
+### Migration `002_share_my_week.sql` (Corrected In-Place / Deployment Note)
+*Deployment & Transition Note*: Modifying `002_share_my_week.sql` in-place only updates fresh local databases. For deployed environments where `002` was previously run, a dedicated follow-up migration script (e.g. `002_tighten_sharing_policies.sql`) must be executed. The frontend MUST be deployed with creation RPC calls before applying policy tightening to prevent breaking direct-insert flows.
 - **Table `public.shared_weeks`**: `id` (text PRIMARY KEY), `user_id` (uuid REFERENCES auth.users ON DELETE CASCADE), `week_start_date` (text), `week_end_date` (text), `week_label` (text), `display_name` (text max 40), `total_planned_minutes` (integer), `items` (jsonb array of allowlisted fields: `id`, `title`, `source`, `type`, `duration`, `coverReference`, `day`, `dateStr`), `is_active` (boolean DEFAULT true), `created_at` (timestamptz DEFAULT now()), `updated_at` (timestamptz DEFAULT now()).
 - **Creation Logging Table `public.share_creation_logs`**: `id` (uuid PRIMARY KEY DEFAULT gen_random_uuid()), `user_id` (uuid REFERENCES auth.users ON DELETE CASCADE), `created_at` (timestamptz DEFAULT now()). RLS enabled (`auth.uid() = user_id`). No public policies.
 - **RLS Policies on `shared_weeks`**:
@@ -69,12 +70,13 @@ Migrations must be applied in exact numerical order:
     v_new_id text;
     v_sanitized_items jsonb := '[]'::jsonb;
     v_elem jsonb;
+    v_duration integer;
   BEGIN
     IF v_user_id IS NULL THEN
       RAISE EXCEPTION 'Not authenticated' USING ERRCODE = '42501';
     END IF;
 
-    -- Input Validation: Ensure p_items is a non-null JSON array
+    -- Strict Input Validation: p_items must be a non-null JSON array
     IF p_items IS NULL OR pg_catalog.jsonb_typeof(p_items) != 'array' THEN
       RAISE EXCEPTION 'Invalid p_items: expected a JSON array.' USING ERRCODE = '22023';
     END IF;
@@ -100,16 +102,26 @@ Migrations must be applied in exact numerical order:
       RAISE EXCEPTION 'Active link quota exceeded: Free accounts may keep up to 3 active links.' USING ERRCODE = 'P0002';
     END IF;
 
-    -- Server-Side Snapshot Sanitization: Allowlist only snapshot properties
+    -- Server-Side Snapshot Sanitization & Type Checking
     FOR v_elem IN SELECT * FROM pg_catalog.jsonb_array_elements(p_items) LOOP
+      IF pg_catalog.jsonb_typeof(v_elem) != 'object' THEN
+        RAISE EXCEPTION 'Invalid item element: expected JSON object.' USING ERRCODE = '22023';
+      END IF;
+
+      -- Reject non-numeric duration instead of silently coercing
+      IF v_elem ? 'duration' AND pg_catalog.jsonb_typeof(v_elem->'duration') != 'number' THEN
+        RAISE EXCEPTION 'Invalid item duration: expected integer number.' USING ERRCODE = '22023';
+      END IF;
+      v_duration := COALESCE((v_elem->>'duration')::integer, 0);
+
       v_sanitized_items := v_sanitized_items || pg_catalog.jsonb_build_object(
         'id', COALESCE(v_elem->>'id', pg_catalog.encode(pg_catalog.gen_random_bytes(16), 'hex')),
-        'title', COALESCE(v_elem->>'title', 'Untitled'),
-        'source', COALESCE(v_elem->>'source', 'Curate'),
-        'type', COALESCE(v_elem->>'type', 'other'),
-        'duration', COALESCE((v_elem->>'duration')::integer, 0),
+        'title', pg_catalog.substring(COALESCE(v_elem->>'title', 'Untitled') from 1 for 150),
+        'source', pg_catalog.substring(COALESCE(v_elem->>'source', 'Curate') from 1 for 60),
+        'type', pg_catalog.substring(COALESCE(v_elem->>'type', 'other') from 1 for 30),
+        'duration', v_duration,
         'coverReference', v_elem->>'coverReference',
-        'day', COALESCE(v_elem->>'day', 'Monday'),
+        'day', pg_catalog.substring(COALESCE(v_elem->>'day', 'Monday') from 1 for 20),
         'dateStr', v_elem->>'dateStr'
       );
     END LOOP;
@@ -217,12 +229,14 @@ Migrations must be applied in exact numerical order:
     v_total_dur integer := 0;
     v_elem jsonb;
     v_idx integer := 0;
+    v_url text;
+    v_yt_id text;
   BEGIN
     IF v_user_id IS NULL THEN
       RAISE EXCEPTION 'Not authenticated' USING ERRCODE = '42501';
     END IF;
 
-    -- Input Validation: Ensure p_items is a non-null JSON array
+    -- Strict Input Validation: p_items must be a non-null JSON array
     IF p_items IS NULL OR pg_catalog.jsonb_typeof(p_items) != 'array' THEN
       RAISE EXCEPTION 'Invalid p_items: expected a JSON array.' USING ERRCODE = '22023';
     END IF;
@@ -266,24 +280,42 @@ Migrations must be applied in exact numerical order:
 
     FOR v_elem IN SELECT * FROM pg_catalog.jsonb_array_elements(p_items) LOOP
       v_idx := v_idx + 1;
+      IF pg_catalog.jsonb_typeof(v_elem) != 'object' THEN
+        RAISE EXCEPTION 'Invalid item element: expected JSON object.' USING ERRCODE = '22023';
+      END IF;
+
+      -- Validate duration type
+      IF v_elem ? 'duration' AND pg_catalog.jsonb_typeof(v_elem->'duration') != 'number' THEN
+        RAISE EXCEPTION 'Invalid item duration: expected integer number.' USING ERRCODE = '22023';
+      END IF;
       v_total_dur := v_total_dur + COALESCE((v_elem->>'duration')::integer, 0);
 
-      -- Explicit field extraction stripping any private notes or unallowlisted properties
+      -- URL Scheme Validation & YouTube ID format check
+      v_url := v_elem->>'url';
+      IF v_url IS NOT NULL AND v_url !~* '^https?://' THEN
+        RAISE EXCEPTION 'Invalid item URL scheme: must start with http:// or https://' USING ERRCODE = '22023';
+      END IF;
+
+      v_yt_id := v_elem->>'youtubeId';
+      IF v_yt_id IS NOT NULL AND v_yt_id !~ '^[a-zA-Z0-9_-]{11}$' THEN
+        RAISE EXCEPTION 'Invalid youtubeId format: expected 11 alphanumeric/dash characters.' USING ERRCODE = '22023';
+      END IF;
+
       INSERT INTO public.collection_items (
         id, collection_id, title, source, type, duration, duration_is_estimate,
         cover_reference, url, canonical_url, youtube_id, position
       ) VALUES (
         COALESCE(v_elem->>'id', pg_catalog.encode(pg_catalog.gen_random_bytes(16), 'hex')),
         v_new_id,
-        COALESCE(v_elem->>'title', 'Untitled'),
-        COALESCE(v_elem->>'source', 'Curate'),
-        COALESCE(v_elem->>'type', 'other'),
+        pg_catalog.substring(COALESCE(v_elem->>'title', 'Untitled') from 1 for 150),
+        pg_catalog.substring(COALESCE(v_elem->>'source', 'Curate') from 1 for 60),
+        pg_catalog.substring(COALESCE(v_elem->>'type', 'other') from 1 for 30),
         COALESCE((v_elem->>'duration')::integer, 0),
         COALESCE((v_elem->>'durationIsEstimate')::boolean, false),
         v_elem->>'coverReference',
-        v_elem->>'url',
+        v_url,
         v_elem->>'canonicalUrl',
-        v_elem->>'youtubeId',
+        v_yt_id,
         v_idx
       );
     END LOOP;
@@ -367,9 +399,9 @@ Migrations must be applied in exact numerical order:
 
 | RPC Name | Security Type | Default `PUBLIC` Revoked | Granted Roles | Intended Operations & Input Validation |
 |---|---|---|---|---|
-| `public.create_shared_week` | `SECURITY DEFINER` | **YES** | `authenticated` | Validates `auth.uid() IS NOT NULL`, `p_items` array type, acquires `pg_advisory_xact_lock`, checks 10/hr rate limit & 3-active quota, sanitizes snapshot items, generates 128-bit hex ID server-side, inserts snapshot & log. |
+| `public.create_shared_week` | `SECURITY DEFINER` | **YES** | `authenticated` | Validates `auth.uid() IS NOT NULL`, `p_items` JSON array type, duration types; acquires advisory lock; enforces 10/hr combined limit & 3-active quota; sanitizes snapshot items; generates server-side 128-bit hex ID; inserts snapshot & log. |
 | `public.get_shared_week` | `SECURITY DEFINER` | **YES** | `anon`, `authenticated` | Public snapshot lookup by exact ID. Active -> sanitized snapshot (`status: 'active'`). Deactivated -> `{ "status": "deactivated" }` (NO user/item metadata). Missing -> `{ "status": "not_found" }`. No list functions. |
-| `public.create_collection` | `SECURITY DEFINER` | **YES** | `authenticated` | Validates `auth.uid() IS NOT NULL`, `p_items` array type & length <= 50, acquires advisory lock, checks 10/hr rate limit & 3-active quota, truncates title/desc, generates server-side hex ID, inserts header & items (retaining allowed content URLs), logs creation. |
+| `public.create_collection` | `SECURITY DEFINER` | **YES** | `authenticated` | Validates `auth.uid() IS NOT NULL`, `p_items` array type & length <= 50, item duration types, URL scheme (`http://` / `https://`), and `youtubeId` format (`^[a-zA-Z0-9_-]{11}$`). Acquires lock; checks 10/hr combined limit & 3-active quota; truncates title/desc; generates server-side hex ID; inserts header & items; logs creation. |
 | `public.get_shared_collection` | `SECURITY DEFINER` | **YES** | `anon`, `authenticated` | Public snapshot lookup by exact ID. Active -> aggregated JSON snapshot of collection + items (`status: 'active'`). Deactivated -> `{ "status": "deactivated" }` (NO item/owner data). Missing -> `{ "status": "not_found" }`. |
 
 ---
@@ -432,12 +464,12 @@ Migrations must be applied in exact numerical order:
   - Status `'deactivated'` -> HTTP 410 Gone (rendered page explaining link is deactivated, with zero private metadata).
   - Status `'active'` -> HTTP 200 OK HTML snapshot with escaped variables.
 
-### Caching Header & Deactivation Window
+### Caching Header & Freshness Target
 - **Cache Header**: `Cache-Control: public, max-age=60, s-maxage=60`
-- **Revocation Window & Caching Realities**:
-  - `max-age=60` defines the intended HTTP freshness window, balancing edge performance against deactivation propagation time.
-  - Because HTTP caching on CDN edge nodes and client web browsers is probabilistic, deactivation takes effect as caches expire within **at most 60 seconds**.
-  - Implementation and integration tests must explicitly verify `Cache-Control` header presence and cache revalidation behavior under simulated re-fetches rather than assuming instant zero-delay global revocation.
+- **Configured Freshness Target & Testing Requirements**:
+  - `max-age=60` defines the configured freshness target, balancing edge performance against deactivation propagation time.
+  - Because HTTP caching across distributed edge CDN nodes and browser caches is probabilistic, deactivation takes effect as cached representations revalidate.
+  - Implementation and integration tests must explicitly verify `Cache-Control` header presence, edge revalidation, stale response handling, and deactivation behavior under simulated re-fetches rather than assuming instant zero-delay global revocation.
 
 ---
 
@@ -453,7 +485,7 @@ Migrations must be applied in exact numerical order:
    - `anon` querying tables directly -> 0 rows.
    - `get_shared_week` & `get_shared_collection` -> verify active returns snapshot, deactivated returns `{ status: 'deactivated' }` with no payload, missing returns `{ status: 'not_found' }`.
 5. **Concurrency, Input Validation & Rate Limit Tests**:
-   - Malformed `p_items` input (e.g. string or null) -> RPC throws exception `22023` ("expected a JSON array").
+   - Malformed `p_items` input (e.g. non-array, invalid item duration type, invalid URL scheme, or malformed `youtubeId`) -> RPC throws exception `22023` ("Invalid input").
    - 5 simultaneous creation RPC calls -> advisory lock queues them; 3 succeed, 4th & 5th fail with quota error.
    - 11 creation calls in 1 hour -> 11th fails with rate limit error.
    - Failed transaction -> releases lock and rolls back creation log.
@@ -462,9 +494,13 @@ Migrations must be applied in exact numerical order:
 
 ---
 
-## 7. Open Questions
+## 7. PR Mergeability & Open Questions
 
-1. *Cloudflare Rate Limiting Plan*: Confirm whether the target Cloudflare account is on Workers Paid (supporting `ratelimits` binding in `wrangler.jsonc`) or Workers Free (requiring WAF rate-limiting rules in Dashboard).
+1. **GitHub PR #18 Mergeability**:
+   - GitHub currently reports PR #18 as not mergeable due to branch divergence or merge condition state.
+   - The merge condition must be diagnosed and resolved separately in GitHub / git history prior to merging. Do not attempt to merge in this task.
+2. **Cloudflare Rate Limiting Plan**:
+   - Confirm whether the target Cloudflare account is on Workers Paid (supporting `ratelimits` binding in `wrangler.jsonc`) or Workers Free (requiring WAF rate-limiting rules in Dashboard).
 
 ---
 
@@ -472,7 +508,7 @@ Migrations must be applied in exact numerical order:
 
 | Step | Description | Estimated Hours |
 |---|---|---|
-| **Step 1: Database Migrations & RPCs** | Correct `002_share_my_week.sql`, write `004_collections.sql`, `create_shared_week` & `create_collection` RPCs with advisory locking, input validation, server-side snapshot sanitization, direct INSERT blocking, explicit `REVOKE EXECUTE ... FROM PUBLIC`, schema qualification (`SET search_path = ''`), public status-aware RPCs | 3.5 hrs |
+| **Step 1: Database Migrations & RPCs** | Correct `002_share_my_week.sql`, write `004_collections.sql`, `create_shared_week` & `create_collection` RPCs with advisory locking, strict input validation & URL scheme checks, server-side snapshot sanitization, direct INSERT blocking, explicit `REVOKE EXECUTE ... FROM PUBLIC`, schema qualification (`SET search_path = ''`), public status-aware RPCs | 3.5 hrs |
 | **Step 2: Cloudflare Worker Core & API Routes** | TypeScript Worker entrypoint (`src/worker/index.ts`), token verification via `getUser`, `/api/share` and `/api/collections` endpoints, `wrangler.jsonc` `run_worker_first` config | 4.0 hrs |
 | **Step 3: Worker HTML Rendering & Security Headers** | HTML renderers for `/w/:id` and `/c/:id`, strict CSP (`script-src 'none'`), status-aware 410 Gone vs 404 logic, `Cache-Control: max-age=60`, 'Report this page' and 'Plan your own week' links | 3.5 hrs |
 | **Step 4: Frontend API Integration & Import Flow** | Wire frontend API calls, token headers, error toasts for quotas/rate limits, collection import flow wiring | 2.5 hrs |
