@@ -18,7 +18,15 @@ This document is for architectural planning only. No code or deletions are perfo
     `collection_id IN (SELECT id FROM public.collections WHERE user_id = auth.uid())`.
     This guarantees a user cannot read, insert, update, or delete items in another user's collection even if they know or guess the `collection_id` or `item_id`.
   - **Owner Writes & Operations**: Authenticated owners perform updates and deactivations using their Supabase JWT access token (`auth.uid() = user_id`).
-  - **Atomic RPC Creations**: Share creation (`create_shared_week`) and collection creation (`create_collection`) are executed via `SECURITY DEFINER` RPC functions. These functions atomically verify per-user creation rate limits (max 10/hour), enforce quota limits (max 3 active shared weeks, max 3 active collections, max 50 items each), log the creation event in `share_creation_logs`, generate a 128-bit cryptographically random hex ID server-side (`encode(gen_random_bytes(16), 'hex')`), and perform the insertion.
+  - **Concurrency-Safe Atomic RPC Creations**:
+    - Share creation (`create_shared_week`) and collection creation (`create_collection`) are executed via `SECURITY DEFINER` RPC functions.
+    - **Transaction-Level Advisory Locking**: At the very beginning of execution, both RPCs acquire an explicit transaction-level PostgreSQL advisory lock scoped to the authenticated user ID:
+      `PERFORM pg_advisory_xact_lock(hashtext('user_share_lock:' || v_user_id::text));`
+    - This serializes all concurrent creation requests for a specific user. If multiple creation requests for the same user land simultaneously across worker threads or DB connections, PostgreSQL queues them sequentially.
+    - **Combined Hourly Rate Limit (10 total / hour)**: The lock ensures an accurate, race-free count of rows in `public.share_creation_logs` across **both** features combined (shared weeks + collections).
+    - **Race-Free Quota Checks**: Active quota counts (`count(*) WHERE user_id = v_user_id AND is_active = true`) are evaluated while holding the lock. A 4th concurrent request will strictly see 3 existing active links and fail with an exception.
+    - **Rollback & Recovery Safety**: Transaction-level advisory locks are automatically released by PostgreSQL when the transaction ends (commit or rollback). If a transaction fails or rolls back, any inserted `share_creation_logs` row is undone, preventing failed/aborted requests from consuming the creation rate limit. Deactivating an active share (`is_active = false`) reduces the active count, immediately recovering quota capacity (up to max 3 active).
+    - **ID Generation**: Generates a 128-bit cryptographically random hex ID server-side (`encode(gen_random_bytes(16), 'hex')`).
   - **Public Snapshot Reads via Status-Aware RPCs**:
     - Public reads to `/w/:id` and `/c/:id` call `SECURITY DEFINER` RPC functions `get_shared_week(p_id)` and `get_shared_collection(p_id)`.
     - To allow the Worker to accurately distinguish HTTP 404 (nonexistent ID) from HTTP 410 (deactivated share link) without exposing private data, the RPC checks for the ID's existence in the database regardless of `is_active`:
@@ -46,7 +54,7 @@ Migrations must be applied in exact numerical order:
   - `SELECT`: `auth.uid() = user_id` (No public SELECT policy).
   - `INSERT`: Allowed only via `create_shared_week` RPC or owner `auth.uid() = user_id`.
   - `UPDATE`, `DELETE`: `auth.uid() = user_id`.
-- **Atomic Creation RPC (`create_shared_week`)**:
+- **Concurrency-Safe Atomic Creation RPC (`create_shared_week`)**:
   ```sql
   CREATE OR REPLACE FUNCTION public.create_shared_week(
     p_week_start_date text,
@@ -71,13 +79,16 @@ Migrations must be applied in exact numerical order:
       RAISE EXCEPTION 'Not authenticated' USING ERRCODE = '42501';
     END IF;
 
-    -- Rate Limit: Max 10 creations per hour
+    -- Concurrency Lock: Acquire per-user transaction advisory lock
+    PERFORM pg_advisory_xact_lock(hashtext('user_share_lock:' || v_user_id::text));
+
+    -- Rate Limit: Max 10 combined creations (shared weeks + collections) per hour
     SELECT count(*) INTO v_recent_creations
     FROM public.share_creation_logs
     WHERE user_id = v_user_id AND created_at > now() - interval '1 hour';
 
     IF v_recent_creations >= 10 THEN
-      RAISE EXCEPTION 'Rate limit exceeded: Max 10 share links per hour.' USING ERRCODE = 'P0001';
+      RAISE EXCEPTION 'Rate limit exceeded: Max 10 creation actions per hour.' USING ERRCODE = 'P0001';
     END IF;
 
     -- Quota: Max 3 active shared weeks
@@ -101,7 +112,7 @@ Migrations must be applied in exact numerical order:
       substring(trim(p_display_name) from 1 for 40), p_total_planned_minutes, p_items, true, now(), now()
     );
 
-    -- Log creation event
+    -- Log creation event (shared across both features)
     INSERT INTO public.share_creation_logs (user_id, created_at) VALUES (v_user_id, now());
 
     RETURN jsonb_build_object('id', v_new_id, 'success', true);
@@ -181,11 +192,9 @@ Migrations must be applied in exact numerical order:
   ```
 
 - **RLS Policies on `collection_items` (Parent-Derived Authorization)**:
-  - Since `collection_items` references `collection_id` without a `user_id` column, authorization for all operations (`SELECT`, `INSERT`, `UPDATE`, `DELETE`) is explicitly derived by checking ownership of the target parent collection in `public.collections`:
   ```sql
   ALTER TABLE public.collection_items ENABLE ROW LEVEL SECURITY;
 
-  -- SELECT Policy: Users can only select items in collections they own
   CREATE POLICY "collection_items_select_policy" ON public.collection_items
     FOR SELECT USING (
       collection_id IN (
@@ -193,7 +202,6 @@ Migrations must be applied in exact numerical order:
       )
     );
 
-  -- INSERT Policy: Users can only add items into collections they own
   CREATE POLICY "collection_items_insert_policy" ON public.collection_items
     FOR INSERT WITH CHECK (
       collection_id IN (
@@ -201,7 +209,6 @@ Migrations must be applied in exact numerical order:
       )
     );
 
-  -- UPDATE Policy: Users can only update items in collections they own
   CREATE POLICY "collection_items_update_policy" ON public.collection_items
     FOR UPDATE USING (
       collection_id IN (
@@ -213,7 +220,6 @@ Migrations must be applied in exact numerical order:
       )
     );
 
-  -- DELETE Policy: Users can only delete items from collections they own
   CREATE POLICY "collection_items_delete_policy" ON public.collection_items
     FOR DELETE USING (
       collection_id IN (
@@ -222,7 +228,7 @@ Migrations must be applied in exact numerical order:
     );
   ```
 
-- **Atomic Creation RPC (`create_collection`)**:
+- **Concurrency-Safe Atomic Creation RPC (`create_collection`)**:
   ```sql
   CREATE OR REPLACE FUNCTION public.create_collection(
     p_title text,
@@ -250,18 +256,21 @@ Migrations must be applied in exact numerical order:
       RAISE EXCEPTION 'Not authenticated' USING ERRCODE = '42501';
     END IF;
 
+    -- Concurrency Lock: Acquire per-user transaction advisory lock
+    PERFORM pg_advisory_xact_lock(hashtext('user_share_lock:' || v_user_id::text));
+
     v_item_count := jsonb_array_length(p_items);
     IF v_item_count > 50 THEN
       RAISE EXCEPTION 'Item limit exceeded: Collections may contain at most 50 items.' USING ERRCODE = 'P0003';
     END IF;
 
-    -- Rate Limit: Max 10 per hour
+    -- Rate Limit: Max 10 combined creations (shared weeks + collections) per hour
     SELECT count(*) INTO v_recent_creations
     FROM public.share_creation_logs
     WHERE user_id = v_user_id AND created_at > now() - interval '1 hour';
 
     IF v_recent_creations >= 10 THEN
-      RAISE EXCEPTION 'Rate limit exceeded: Max 10 share links/collections per hour.' USING ERRCODE = 'P0001';
+      RAISE EXCEPTION 'Rate limit exceeded: Max 10 creation actions per hour.' USING ERRCODE = 'P0001';
     END IF;
 
     -- Quota: Max 3 active collections
@@ -390,8 +399,9 @@ Migrations must be applied in exact numerical order:
 
 ## 3. Rate Limiting Strategy
 
-1. **Per-User Creation Rate Limit (10/hour)**:
-   - Atomically enforced inside `create_shared_week` and `create_collection` RPCs by counting rows in `share_creation_logs` for `auth.uid()` in the preceding 60 minutes. Returns exception `P0001` (HTTP 429 in client) if exceeded.
+1. **Combined Per-User Creation Limit (10 total / hour)**:
+   - Enforced across **both** shared weeks and collections combined via transaction-level advisory locks in `create_shared_week` and `create_collection`.
+   - Counts total rows in `share_creation_logs` for `v_user_id` in `now() - interval '1 hour'`. If `>= 10`, returns exception `P0001` (HTTP 429 in API).
 2. **Per-IP Public Page Rate Limit**:
    - **Chosen Method**: Cloudflare Workers Rate Limiting binding (`PUBLIC_RATE_LIMITER` binding in `wrangler.jsonc`), providing 100 req/min edge protection without querying Postgres.
    - **Fallback**: Cloudflare Dashboard WAF Rate Limiting rules targeting `/w/*` and `/c/*` if bindings are unavailable on the Cloudflare plan.
@@ -525,13 +535,16 @@ The Worker handles requests strictly based on the ID format and RPC result statu
    - Verifies User A cannot read, insert, update, or delete items in User B's `collection_items` even if they guess User B's `collection_id` or `item_id`.
    - Verifies `anon` role receives zero rows querying `shared_weeks`, `collections`, or `collection_items` directly.
    - Verifies `get_shared_collection` returns `{ status: 'active' }` for active IDs, `{ status: 'deactivated' }` (with NO items/user metadata) for deactivated IDs, and `{ status: 'not_found' }` for nonexistent IDs.
-4. **HTTP Status Code Verification**:
+4. **Concurrency & Rate Limit Integration Test Scenarios**:
+   - **Simultaneous Share Creation**: Fires 5 concurrent `create_shared_week` calls for User A (who has 0 active shares). Transaction advisory lock serializes execution: requests 1, 2, 3 succeed; requests 4 and 5 fail with exception `P0002` ("Active link quota exceeded"). Exactly 3 active shares created.
+   - **Simultaneous Collection Creation**: Fires 5 concurrent `create_collection` calls for User A. Lock serializes execution: 3 succeed, 2 fail. Exactly 3 active collections created.
+   - **Combined Hourly Rate Limit**: Fires 6 `create_shared_week` RPCs followed by 5 `create_collection` RPCs within 1 hour for User A. Lock serializes execution: first 10 total creations log into `share_creation_logs`; the 11th creation attempt fails with exception `P0001` ("Rate limit exceeded").
+   - **Transaction Rollback Behavior**: Simulates a creation attempt where `collection_items` insertion fails midway (e.g. invalid type). The entire RPC transaction rolls back, releasing the advisory lock and undoing the `share_creation_logs` insert. Creation log count remains unaffected.
+   - **Quota Recovery After Deactivation**: User A deactivates 1 of 3 active shared weeks (`is_active = false`). Active share count drops to 2. Subsequent `create_shared_week` call acquires lock, sees 2 active shares, and succeeds.
+5. **HTTP Status Code Verification**:
    - Malformed ID (`/w/invalid..id`) -> HTTP 400 Bad Request.
    - Nonexistent ID (`/w/00000000000000000000000000000000`) -> HTTP 404 Not Found.
    - Deactivated ID (`is_active = false`) -> HTTP 410 Gone.
-5. **Rate Limit & Quota Tests**:
-   - 4th share creation attempt -> Error toast "Active link quota exceeded".
-   - 11th creation attempt in 1 hour -> Error toast "Rate limit exceeded".
 
 ---
 
@@ -545,10 +558,10 @@ The Worker handles requests strictly based on the ID format and RPC result statu
 
 | Step | Description | Estimated Hours |
 |---|---|---|
-| **Step 1: Database Migrations & RPCs** | Correct `002_share_my_week.sql`, write `004_collections.sql`, `create_shared_week` & `create_collection` RPCs with 128-bit hex generation, quota & 10/hr rate limit checks, `share_creation_logs` with RLS, public status-aware RPCs `get_shared_week` & `get_shared_collection` | 3.5 hrs |
+| **Step 1: Database Migrations & RPCs** | Correct `002_share_my_week.sql`, write `004_collections.sql`, concurrency-safe `create_shared_week` & `create_collection` RPCs with `pg_advisory_xact_lock`, combined 10/hr rate limit logging, 128-bit hex generation, public status-aware RPCs `get_shared_week` & `get_shared_collection` | 3.5 hrs |
 | **Step 2: Cloudflare Worker Core & API Routes** | TypeScript Worker entrypoint (`src/worker/index.ts`), token verification via `getUser`, `/api/share` and `/api/collections` endpoints, `wrangler.jsonc` `run_worker_first` config | 4.0 hrs |
 | **Step 3: Worker HTML Rendering & Security Headers** | HTML renderers for `/w/:id` and `/c/:id`, strict CSP (`script-src 'none'`), status-aware 410 Gone vs 404 logic, `Cache-Control: max-age=60`, 'Report this page' and 'Plan your own week' links | 3.5 hrs |
 | **Step 4: Frontend API Integration & Import Flow** | Wire frontend API calls, token headers, error toasts for quotas/rate limits, collection import flow wiring | 2.5 hrs |
-| **Step 5: Automated & Manual Security Test Suite** | Write automated Worker HTML escaping tests, `supabase/tests/004_rls_sharing_test.sql` two-account script, XSS & metacharacter verification | 3.0 hrs |
+| **Step 5: Automated & Manual Security Test Suite** | Write automated Worker HTML escaping tests, `supabase/tests/004_rls_sharing_test.sql` two-account & concurrency test script, XSS & metacharacter verification | 3.0 hrs |
 | **Step 6: Config Validation, Cleanup & E2E Verification** | Remove `server.ts` & `data/`, validate `wrangler.jsonc` assets routing, local `wrangler dev` testing, security review | 2.5 hrs |
 | **Total** | | **19.0 hrs** |
