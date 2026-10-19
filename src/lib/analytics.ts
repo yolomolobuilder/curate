@@ -20,10 +20,6 @@ export const ANALYTICS_STORAGE_KEY = 'curatecal_analytics_events_v1';
 // Timestamp of app startup / open
 let appOpenTimestamp = Date.now();
 
-export function setAppOpenTimestamp(ts: number): void {
-  appOpenTimestamp = ts;
-}
-
 export function getSecondsSinceOpen(): number {
   return Math.max(0, Math.round((Date.now() - appOpenTimestamp) / 1000));
 }

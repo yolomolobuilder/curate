@@ -313,33 +313,6 @@ export async function deleteMediaItem(refOrId: string): Promise<void> {
 }
 
 /**
- * Preloads all known media references into memory cache on app load.
- */
-export async function preloadAllMedia(): Promise<void> {
-  try {
-    const db = await openDB();
-    if (!db) return;
-
-    const tx = db.transaction(STORE_NAME, 'readonly');
-    const store = tx.objectStore(STORE_NAME);
-    const req = store.getAll();
-
-    req.onsuccess = () => {
-      if (Array.isArray(req.result)) {
-        for (const item of req.result) {
-          if (item && item.id && item.data) {
-            memoryCache.set(`idb:${item.id}`, item.data);
-            memoryCache.set(item.id, item.data);
-          }
-        }
-      }
-    };
-  } catch (err) {
-    console.warn('[MediaStorage] Preload failed:', err);
-  }
-}
-
-/**
  * Checks whether a string is an IndexedDB media reference pointer.
  */
 export function isMediaReference(refOrData: string): boolean {

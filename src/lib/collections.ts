@@ -2,10 +2,19 @@ import { ContentItem, ContentType, getItemSource } from '../types';
 import { extractYouTubeId } from './metadataExtractor';
 import { trackEvent } from './analytics';
 
-export const MAX_FREE_COLLECTIONS = 3;
-export const MAX_COLLECTION_ITEMS = 50;
-export const MAX_COLLECTION_TITLE_LENGTH = 80;
-export const MAX_COLLECTION_DESC_LENGTH = 300;
+import {
+  MAX_FREE_COLLECTIONS,
+  MAX_COLLECTION_ITEMS,
+  MAX_COLLECTION_TITLE_LENGTH,
+  MAX_COLLECTION_DESC_LENGTH,
+} from '../types';
+
+export {
+  MAX_FREE_COLLECTIONS,
+  MAX_COLLECTION_ITEMS,
+  MAX_COLLECTION_TITLE_LENGTH,
+  MAX_COLLECTION_DESC_LENGTH,
+};
 export const COLLECTIONS_STORAGE_KEY = 'curate_user_collections_v1';
 
 export interface CollectionItem {
