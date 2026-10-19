@@ -14,18 +14,21 @@ This document is for architectural planning only. No code or deletions are perfo
   - All other static requests pass directly to `env.ASSETS.fetch(request)`.
 - **Data Access & Security Model**:
   - **Zero Public SELECT Policies**: Tables `shared_weeks`, `collections`, `collection_items`, and `share_creation_logs` have Row-Level Security (RLS) enabled with NO public `SELECT` policies.
-  - **Direct Client INSERT Disallowed**: To prevent users from bypassing creation rate limits or quotas via direct REST API calls, direct client `INSERT` is blocked via RLS (`WITH CHECK (false)`). All creations must flow through `SECURITY DEFINER` RPCs (`create_shared_week` and `create_collection`).
-  - **Owner Updates & Deletions**: Authenticated owners update (`is_active = false` or title updates) and delete their records via RLS (`auth.uid() = user_id`).
-  - **Parent-Derived Authorization**: `collection_items` has no `user_id` column; authorization is strictly derived via parent collection ownership: `collection_id IN (SELECT id FROM public.collections WHERE user_id = auth.uid())`.
+  - **Public-Read Policy Transition**: The existing `supabase/migrations/002_share_my_week.sql` in `main` currently allows direct client inserts and public `SELECT` reads (`USING (is_active = true)`). In this architecture, direct public `SELECT` access on tables is completely eliminated and transitioned to `SECURITY DEFINER` RPCs (`get_shared_week` and `get_shared_collection`).
+  - **Creation-Path & Direct INSERT Disallowance**: Direct client `INSERT` on `shared_weeks`, `collections`, and `collection_items` is prohibited via RLS (`WITH CHECK (false)`). All creations must flow through `SECURITY DEFINER` RPCs (`create_shared_week` and `create_collection`) to prevent users from bypassing creation rate limits or quotas via direct REST API calls. The frontend must be updated to invoke these creation RPCs before applying the migration.
+  - **Owner Updates & Deletions**: Authenticated owners retain direct `UPDATE` (for toggling `is_active = false` or updating display settings) and `DELETE` via RLS (`auth.uid() = user_id`).
+  - **Parent-Derived Authorization**: `collection_items` has no `user_id` column; authorization for owner operations is strictly derived via parent collection ownership: `collection_id IN (SELECT id FROM public.collections WHERE user_id = auth.uid())`.
   - **Concurrency-Safe Atomic Creations**:
     - `create_shared_week` and `create_collection` RPCs acquire an advisory lock at transaction start: `PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('user_share_lock:' || v_user_id::text));`
     - This serializes creation attempts per user, preventing race conditions on quotas (max 3 active shared weeks, max 3 active collections) and enforcing a combined rate limit (max 10 total creations/hour across both features).
     - Failed/rolled-back transactions automatically release the lock and undo rate-limit logging.
     - Server-side 128-bit random hex IDs (`pg_catalog.encode(pg_catalog.gen_random_bytes(16), 'hex')`) are generated inside the RPC.
-  - **Server-Side Snapshot Sanitization**: RPCs explicitly validate and construct allowlisted snapshot payloads, stripping private notes, internal URLs, or unallowlisted JSON properties before storing.
+  - **Server-Side Snapshot Sanitization & Collection URLs**:
+    - Creation RPCs explicitly validate inputs (checking non-null `p_items` array, JSON types, item counts <= 50, and string length bounds; raising `ERRCODE = '22023'` on malformed input) and construct an allowlisted snapshot payload.
+    - **Collection Content URLs Policy**: For collections, public item content URLs (`url`, `canonicalUrl`, `youtubeId`) are intentionally included in the public snapshot to enable public bookmarking and preview features. Private notes, internal app URLs, user metadata, or unallowlisted fields are strictly stripped server-side.
   - **Public Reads via Status-Aware RPCs**:
     - `/w/:id` and `/c/:id` call `SECURITY DEFINER` RPCs `get_shared_week(p_id)` and `get_shared_collection(p_id)`.
-    - Returns `{ "status": "not_found" }` if ID missing (Worker serves HTTP 404).
+    - Returns `{ "status": "not_found" }` if ID is missing (Worker serves HTTP 404).
     - Returns `{ "status": "deactivated" }` with **NO item data, notes, titles, or user metadata** if `is_active = false` (Worker serves HTTP 410).
     - Returns `{ "status": "active", ...snapshotData }` if `is_active = true` (Worker serves HTTP 200).
     - Functions execute with `SET search_path = ''` and fully schema-qualified object references. Default `PUBLIC` execution privileges are explicitly revoked.
@@ -69,6 +72,11 @@ Migrations must be applied in exact numerical order:
   BEGIN
     IF v_user_id IS NULL THEN
       RAISE EXCEPTION 'Not authenticated' USING ERRCODE = '42501';
+    END IF;
+
+    -- Input Validation: Ensure p_items is a non-null JSON array
+    IF p_items IS NULL OR pg_catalog.jsonb_typeof(p_items) != 'array' THEN
+      RAISE EXCEPTION 'Invalid p_items: expected a JSON array.' USING ERRCODE = '22023';
     END IF;
 
     -- Concurrency Lock: Acquire per-user transaction advisory lock
@@ -214,6 +222,11 @@ Migrations must be applied in exact numerical order:
       RAISE EXCEPTION 'Not authenticated' USING ERRCODE = '42501';
     END IF;
 
+    -- Input Validation: Ensure p_items is a non-null JSON array
+    IF p_items IS NULL OR pg_catalog.jsonb_typeof(p_items) != 'array' THEN
+      RAISE EXCEPTION 'Invalid p_items: expected a JSON array.' USING ERRCODE = '22023';
+    END IF;
+
     PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('user_share_lock:' || v_user_id::text));
 
     v_item_count := pg_catalog.jsonb_array_length(p_items);
@@ -354,9 +367,9 @@ Migrations must be applied in exact numerical order:
 
 | RPC Name | Security Type | Default `PUBLIC` Revoked | Granted Roles | Intended Operations & Input Validation |
 |---|---|---|---|---|
-| `public.create_shared_week` | `SECURITY DEFINER` | **YES** | `authenticated` | Validates `auth.uid() IS NOT NULL`, acquires `pg_advisory_xact_lock`, checks 10/hr combined rate limit & 3-active quota, sanitizes snapshot items, generates 128-bit hex ID server-side, inserts snapshot & log. |
+| `public.create_shared_week` | `SECURITY DEFINER` | **YES** | `authenticated` | Validates `auth.uid() IS NOT NULL`, `p_items` array type, acquires `pg_advisory_xact_lock`, checks 10/hr rate limit & 3-active quota, sanitizes snapshot items, generates 128-bit hex ID server-side, inserts snapshot & log. |
 | `public.get_shared_week` | `SECURITY DEFINER` | **YES** | `anon`, `authenticated` | Public snapshot lookup by exact ID. Active -> sanitized snapshot (`status: 'active'`). Deactivated -> `{ "status": "deactivated" }` (NO user/item metadata). Missing -> `{ "status": "not_found" }`. No list functions. |
-| `public.create_collection` | `SECURITY DEFINER` | **YES** | `authenticated` | Validates `auth.uid() IS NOT NULL` & item length <= 50, acquires advisory lock, checks 10/hr combined rate limit & 3-active quota, truncates title/desc, generates server-side hex ID, inserts header & items, logs creation. |
+| `public.create_collection` | `SECURITY DEFINER` | **YES** | `authenticated` | Validates `auth.uid() IS NOT NULL`, `p_items` array type & length <= 50, acquires advisory lock, checks 10/hr rate limit & 3-active quota, truncates title/desc, generates server-side hex ID, inserts header & items (retaining allowed content URLs), logs creation. |
 | `public.get_shared_collection` | `SECURITY DEFINER` | **YES** | `anon`, `authenticated` | Public snapshot lookup by exact ID. Active -> aggregated JSON snapshot of collection + items (`status: 'active'`). Deactivated -> `{ "status": "deactivated" }` (NO item/owner data). Missing -> `{ "status": "not_found" }`. |
 
 ---
@@ -419,9 +432,12 @@ Migrations must be applied in exact numerical order:
   - Status `'deactivated'` -> HTTP 410 Gone (rendered page explaining link is deactivated, with zero private metadata).
   - Status `'active'` -> HTTP 200 OK HTML snapshot with escaped variables.
 
-### Caching Header & Deactivation Propagation
-- `Cache-Control: public, max-age=60, s-maxage=60`
-- *Propagation Trade-off*: Setting `max-age=60` allows CDN edge caching for performance while guaranteeing that when an owner deactivates a link, any cached 200 OK response expires globally within **at most 60 seconds**, after which the edge serves 410 Gone.
+### Caching Header & Deactivation Window
+- **Cache Header**: `Cache-Control: public, max-age=60, s-maxage=60`
+- **Revocation Window & Caching Realities**:
+  - `max-age=60` defines the intended HTTP freshness window, balancing edge performance against deactivation propagation time.
+  - Because HTTP caching on CDN edge nodes and client web browsers is probabilistic, deactivation takes effect as caches expire within **at most 60 seconds**.
+  - Implementation and integration tests must explicitly verify `Cache-Control` header presence and cache revalidation behavior under simulated re-fetches rather than assuming instant zero-delay global revocation.
 
 ---
 
@@ -436,7 +452,8 @@ Migrations must be applied in exact numerical order:
    - User A reading/updating/deleting User B's collections or items -> blocked by RLS.
    - `anon` querying tables directly -> 0 rows.
    - `get_shared_week` & `get_shared_collection` -> verify active returns snapshot, deactivated returns `{ status: 'deactivated' }` with no payload, missing returns `{ status: 'not_found' }`.
-5. **Concurrency & Rate Limit Tests**:
+5. **Concurrency, Input Validation & Rate Limit Tests**:
+   - Malformed `p_items` input (e.g. string or null) -> RPC throws exception `22023` ("expected a JSON array").
    - 5 simultaneous creation RPC calls -> advisory lock queues them; 3 succeed, 4th & 5th fail with quota error.
    - 11 creation calls in 1 hour -> 11th fails with rate limit error.
    - Failed transaction -> releases lock and rolls back creation log.
@@ -455,7 +472,7 @@ Migrations must be applied in exact numerical order:
 
 | Step | Description | Estimated Hours |
 |---|---|---|
-| **Step 1: Database Migrations & RPCs** | Correct `002_share_my_week.sql`, write `004_collections.sql`, `create_shared_week` & `create_collection` RPCs with advisory locking, server-side snapshot sanitization, direct INSERT blocking, explicit `REVOKE EXECUTE ... FROM PUBLIC`, schema qualification (`SET search_path = ''`), public status-aware RPCs | 3.5 hrs |
+| **Step 1: Database Migrations & RPCs** | Correct `002_share_my_week.sql`, write `004_collections.sql`, `create_shared_week` & `create_collection` RPCs with advisory locking, input validation, server-side snapshot sanitization, direct INSERT blocking, explicit `REVOKE EXECUTE ... FROM PUBLIC`, schema qualification (`SET search_path = ''`), public status-aware RPCs | 3.5 hrs |
 | **Step 2: Cloudflare Worker Core & API Routes** | TypeScript Worker entrypoint (`src/worker/index.ts`), token verification via `getUser`, `/api/share` and `/api/collections` endpoints, `wrangler.jsonc` `run_worker_first` config | 4.0 hrs |
 | **Step 3: Worker HTML Rendering & Security Headers** | HTML renderers for `/w/:id` and `/c/:id`, strict CSP (`script-src 'none'`), status-aware 410 Gone vs 404 logic, `Cache-Control: max-age=60`, 'Report this page' and 'Plan your own week' links | 3.5 hrs |
 | **Step 4: Frontend API Integration & Import Flow** | Wire frontend API calls, token headers, error toasts for quotas/rate limits, collection import flow wiring | 2.5 hrs |
