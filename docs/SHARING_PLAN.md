@@ -21,19 +21,25 @@ This document is for architectural planning only. No code or deletions are perfo
   - **Concurrency-Safe Atomic RPC Creations**:
     - Share creation (`create_shared_week`) and collection creation (`create_collection`) are executed via `SECURITY DEFINER` RPC functions.
     - **Transaction-Level Advisory Locking**: At the very beginning of execution, both RPCs acquire an explicit transaction-level PostgreSQL advisory lock scoped to the authenticated user ID:
-      `PERFORM pg_advisory_xact_lock(hashtext('user_share_lock:' || v_user_id::text));`
+      `PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('user_share_lock:' || v_user_id::text));`
     - This serializes all concurrent creation requests for a specific user. If multiple creation requests for the same user land simultaneously across worker threads or DB connections, PostgreSQL queues them sequentially.
     - **Combined Hourly Rate Limit (10 total / hour)**: The lock ensures an accurate, race-free count of rows in `public.share_creation_logs` across **both** features combined (shared weeks + collections).
     - **Race-Free Quota Checks**: Active quota counts (`count(*) WHERE user_id = v_user_id AND is_active = true`) are evaluated while holding the lock. A 4th concurrent request will strictly see 3 existing active links and fail with an exception.
     - **Rollback & Recovery Safety**: Transaction-level advisory locks are automatically released by PostgreSQL when the transaction ends (commit or rollback). If a transaction fails or rolls back, any inserted `share_creation_logs` row is undone, preventing failed/aborted requests from consuming the creation rate limit. Deactivating an active share (`is_active = false`) reduces the active count, immediately recovering quota capacity (up to max 3 active).
-    - **ID Generation**: Generates a 128-bit cryptographically random hex ID server-side (`encode(gen_random_bytes(16), 'hex')`).
+    - **ID Generation**: Generates a 128-bit cryptographically random hex ID server-side (`pg_catalog.encode(pg_catalog.gen_random_bytes(16), 'hex')`).
+  - **Hardened RPC Permissions & Public Default Revocation**:
+    - In PostgreSQL, newly created functions automatically grant `EXECUTE` privileges to the `PUBLIC` pseudorole by default.
+    - To prevent unauthorized execution or privilege escalation, all sharing RPCs explicitly execute `REVOKE EXECUTE ON FUNCTION ... FROM PUBLIC;` before granting granular access to specific roles.
+    - Public read functions (`get_shared_week`, `get_shared_collection`) are granted to `anon` and `authenticated`.
+    - Creation functions (`create_shared_week`, `create_collection`) are granted to `authenticated` ONLY.
+    - All `SECURITY DEFINER` functions run with `SET search_path = ''` and fully schema-qualify all function and table references (e.g., `public.shared_weeks`, `pg_catalog.gen_random_bytes`, `auth.uid()`).
   - **Public Snapshot Reads via Status-Aware RPCs**:
     - Public reads to `/w/:id` and `/c/:id` call `SECURITY DEFINER` RPC functions `get_shared_week(p_id)` and `get_shared_collection(p_id)`.
     - To allow the Worker to accurately distinguish HTTP 404 (nonexistent ID) from HTTP 410 (deactivated share link) without exposing private data, the RPC checks for the ID's existence in the database regardless of `is_active`:
       - If ID is NOT found: Returns `status = 'not_found'` (or NULL JSON).
       - If ID exists BUT `is_active = false`: Returns `status = 'deactivated'`, accompanied by **NO item data, notes, titles, dates, or user metadata**.
       - If ID exists AND `is_active = true`: Returns `status = 'active'`, along with the sanitized snapshot data.
-    - These functions run with `SET search_path = ''` and are granted to `anon` and `authenticated`. No listing or enumeration functions exist.
+    - No listing or enumeration functions exist.
   - **No Service-Role Key Needed**: The Worker uses `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` exclusively.
 - **Authentication**: Worker verifies user tokens via `supabase.auth.getUser(token)` using `SUPABASE_PUBLISHABLE_KEY`. Local JWKS signature verification is noted as a future latency optimization.
 
@@ -80,19 +86,19 @@ Migrations must be applied in exact numerical order:
     END IF;
 
     -- Concurrency Lock: Acquire per-user transaction advisory lock
-    PERFORM pg_advisory_xact_lock(hashtext('user_share_lock:' || v_user_id::text));
+    PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('user_share_lock:' || v_user_id::text));
 
     -- Rate Limit: Max 10 combined creations (shared weeks + collections) per hour
-    SELECT count(*) INTO v_recent_creations
+    SELECT pg_catalog.count(*) INTO v_recent_creations
     FROM public.share_creation_logs
-    WHERE user_id = v_user_id AND created_at > now() - interval '1 hour';
+    WHERE user_id = v_user_id AND created_at > pg_catalog.now() - interval '1 hour';
 
     IF v_recent_creations >= 10 THEN
       RAISE EXCEPTION 'Rate limit exceeded: Max 10 creation actions per hour.' USING ERRCODE = 'P0001';
     END IF;
 
     -- Quota: Max 3 active shared weeks
-    SELECT count(*) INTO v_active_shares
+    SELECT pg_catalog.count(*) INTO v_active_shares
     FROM public.shared_weeks
     WHERE user_id = v_user_id AND is_active = true;
 
@@ -101,7 +107,7 @@ Migrations must be applied in exact numerical order:
     END IF;
 
     -- Server-side 128-bit random hex ID generation (32 chars)
-    v_new_id := encode(gen_random_bytes(16), 'hex');
+    v_new_id := pg_catalog.encode(pg_catalog.gen_random_bytes(16), 'hex');
 
     -- Insert snapshot
     INSERT INTO public.shared_weeks (
@@ -109,17 +115,20 @@ Migrations must be applied in exact numerical order:
       display_name, total_planned_minutes, items, is_active, created_at, updated_at
     ) VALUES (
       v_new_id, v_user_id, p_week_start_date, p_week_end_date, p_week_label,
-      substring(trim(p_display_name) from 1 for 40), p_total_planned_minutes, p_items, true, now(), now()
+      pg_catalog.substring(pg_catalog.trim(p_display_name) from 1 for 40),
+      p_total_planned_minutes, p_items, true, pg_catalog.now(), pg_catalog.now()
     );
 
     -- Log creation event (shared across both features)
-    INSERT INTO public.share_creation_logs (user_id, created_at) VALUES (v_user_id, now());
+    INSERT INTO public.share_creation_logs (user_id, created_at) VALUES (v_user_id, pg_catalog.now());
 
-    RETURN jsonb_build_object('id', v_new_id, 'success', true);
+    RETURN pg_catalog.jsonb_build_object('id', v_new_id, 'success', true);
   END;
   $$;
 
-  GRANT EXECUTE ON FUNCTION public.create_shared_week TO authenticated;
+  -- Revoke default PUBLIC privileges and grant exclusively to authenticated
+  REVOKE EXECUTE ON FUNCTION public.create_shared_week(text, text, text, text, integer, jsonb) FROM PUBLIC;
+  GRANT EXECUTE ON FUNCTION public.create_shared_week(text, text, text, text, integer, jsonb) TO authenticated;
   ```
 - **Public Status-Aware Read RPC (`get_shared_week`)**:
   ```sql
@@ -140,16 +149,16 @@ Migrations must be applied in exact numerical order:
 
     -- Case 1: ID does not exist in database -> HTTP 404
     IF NOT FOUND THEN
-      RETURN jsonb_build_object('status', 'not_found');
+      RETURN pg_catalog.jsonb_build_object('status', 'not_found');
     END IF;
 
     -- Case 2: ID exists but is deactivated -> HTTP 410 (Returns NO snapshot or user data)
     IF NOT v_row.is_active THEN
-      RETURN jsonb_build_object('status', 'deactivated');
+      RETURN pg_catalog.jsonb_build_object('status', 'deactivated');
     END IF;
 
     -- Case 3: ID exists and is active -> HTTP 200
-    RETURN jsonb_build_object(
+    RETURN pg_catalog.jsonb_build_object(
       'status', 'active',
       'id', v_row.id,
       'weekStartDate', v_row.week_start_date,
@@ -163,6 +172,8 @@ Migrations must be applied in exact numerical order:
   END;
   $$;
 
+  -- Revoke default PUBLIC privileges and grant to anon and authenticated
+  REVOKE EXECUTE ON FUNCTION public.get_shared_week(text) FROM PUBLIC;
   GRANT EXECUTE ON FUNCTION public.get_shared_week(text) TO anon, authenticated;
   ```
 
@@ -257,24 +268,24 @@ Migrations must be applied in exact numerical order:
     END IF;
 
     -- Concurrency Lock: Acquire per-user transaction advisory lock
-    PERFORM pg_advisory_xact_lock(hashtext('user_share_lock:' || v_user_id::text));
+    PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('user_share_lock:' || v_user_id::text));
 
-    v_item_count := jsonb_array_length(p_items);
+    v_item_count := pg_catalog.jsonb_array_length(p_items);
     IF v_item_count > 50 THEN
       RAISE EXCEPTION 'Item limit exceeded: Collections may contain at most 50 items.' USING ERRCODE = 'P0003';
     END IF;
 
     -- Rate Limit: Max 10 combined creations (shared weeks + collections) per hour
-    SELECT count(*) INTO v_recent_creations
+    SELECT pg_catalog.count(*) INTO v_recent_creations
     FROM public.share_creation_logs
-    WHERE user_id = v_user_id AND created_at > now() - interval '1 hour';
+    WHERE user_id = v_user_id AND created_at > pg_catalog.now() - interval '1 hour';
 
     IF v_recent_creations >= 10 THEN
       RAISE EXCEPTION 'Rate limit exceeded: Max 10 creation actions per hour.' USING ERRCODE = 'P0001';
     END IF;
 
     -- Quota: Max 3 active collections
-    SELECT count(*) INTO v_active_collections
+    SELECT pg_catalog.count(*) INTO v_active_collections
     FROM public.collections
     WHERE user_id = v_user_id AND is_active = true;
 
@@ -282,7 +293,7 @@ Migrations must be applied in exact numerical order:
       RAISE EXCEPTION 'Collection quota exceeded: Free accounts may keep up to 3 active collections.' USING ERRCODE = 'P0004';
     END IF;
 
-    v_new_id := encode(gen_random_bytes(16), 'hex');
+    v_new_id := pg_catalog.encode(pg_catalog.gen_random_bytes(16), 'hex');
 
     -- Insert collection header
     INSERT INTO public.collections (
@@ -290,15 +301,15 @@ Migrations must be applied in exact numerical order:
       is_active, total_duration_minutes, created_at, updated_at
     ) VALUES (
       v_new_id, v_user_id,
-      substring(trim(p_title) from 1 for 80),
-      substring(trim(p_description) from 1 for 300),
-      substring(trim(p_display_name) from 1 for 40),
+      pg_catalog.substring(pg_catalog.trim(p_title) from 1 for 80),
+      pg_catalog.substring(pg_catalog.trim(p_description) from 1 for 300),
+      pg_catalog.substring(pg_catalog.trim(p_display_name) from 1 for 40),
       COALESCE(p_allow_search_engines, false),
-      true, 0, now(), now()
+      true, 0, pg_catalog.now(), pg_catalog.now()
     );
 
     -- Insert collection items
-    FOR v_elem IN SELECT * FROM jsonb_array_elements(p_items) LOOP
+    FOR v_elem IN SELECT * FROM pg_catalog.jsonb_array_elements(p_items) LOOP
       v_idx := v_idx + 1;
       v_total_dur := v_total_dur + COALESCE((v_elem->>'duration')::integer, 0);
 
@@ -306,7 +317,7 @@ Migrations must be applied in exact numerical order:
         id, collection_id, title, source, type, duration, duration_is_estimate,
         cover_reference, url, canonical_url, youtube_id, position
       ) VALUES (
-        COALESCE(v_elem->>'id', encode(gen_random_bytes(16), 'hex')),
+        COALESCE(v_elem->>'id', pg_catalog.encode(pg_catalog.gen_random_bytes(16), 'hex')),
         v_new_id,
         COALESCE(v_elem->>'title', 'Untitled'),
         COALESCE(v_elem->>'source', 'Curate'),
@@ -322,13 +333,15 @@ Migrations must be applied in exact numerical order:
     END LOOP;
 
     UPDATE public.collections SET total_duration_minutes = v_total_dur WHERE id = v_new_id;
-    INSERT INTO public.share_creation_logs (user_id, created_at) VALUES (v_user_id, now());
+    INSERT INTO public.share_creation_logs (user_id, created_at) VALUES (v_user_id, pg_catalog.now());
 
-    RETURN jsonb_build_object('id', v_new_id, 'success', true);
+    RETURN pg_catalog.jsonb_build_object('id', v_new_id, 'success', true);
   END;
   $$;
 
-  GRANT EXECUTE ON FUNCTION public.create_collection TO authenticated;
+  -- Revoke default PUBLIC privileges and grant exclusively to authenticated
+  REVOKE EXECUTE ON FUNCTION public.create_collection(text, text, text, boolean, jsonb) FROM PUBLIC;
+  GRANT EXECUTE ON FUNCTION public.create_collection(text, text, text, boolean, jsonb) TO authenticated;
   ```
 
 - **Public Status-Aware Read RPC (`get_shared_collection`)**:
@@ -351,17 +364,17 @@ Migrations must be applied in exact numerical order:
 
     -- Case 1: ID does not exist in database -> HTTP 404
     IF NOT FOUND THEN
-      RETURN jsonb_build_object('status', 'not_found');
+      RETURN pg_catalog.jsonb_build_object('status', 'not_found');
     END IF;
 
     -- Case 2: ID exists but is deactivated -> HTTP 410 (Returns NO item data or owner info)
     IF NOT v_col.is_active THEN
-      RETURN jsonb_build_object('status', 'deactivated');
+      RETURN pg_catalog.jsonb_build_object('status', 'deactivated');
     END IF;
 
     -- Case 3: ID exists and is active -> HTTP 200
-    SELECT jsonb_agg(
-      jsonb_build_object(
+    SELECT pg_catalog.jsonb_agg(
+      pg_catalog.jsonb_build_object(
         'id', i.id,
         'title', i.title,
         'source', i.source,
@@ -377,7 +390,7 @@ Migrations must be applied in exact numerical order:
     FROM public.collection_items i
     WHERE i.collection_id = p_id;
 
-    RETURN jsonb_build_object(
+    RETURN pg_catalog.jsonb_build_object(
       'status', 'active',
       'id', v_col.id,
       'title', v_col.title,
@@ -392,12 +405,25 @@ Migrations must be applied in exact numerical order:
   END;
   $$;
 
+  -- Revoke default PUBLIC privileges and grant to anon and authenticated
+  REVOKE EXECUTE ON FUNCTION public.get_shared_collection(text) FROM PUBLIC;
   GRANT EXECUTE ON FUNCTION public.get_shared_collection(text) TO anon, authenticated;
   ```
 
 ---
 
-## 3. Rate Limiting Strategy
+## 3. Function-by-Function Permission Matrix
+
+| RPC Name | Function Signature | Security Type | Default `PUBLIC` Revoked | Granted Roles | Intended Operations & Input Validation |
+|---|---|---|---|---|---|
+| `public.create_shared_week` | `(text, text, text, text, integer, jsonb)` | `SECURITY DEFINER` | **YES** (`REVOKE ... FROM PUBLIC`) | `authenticated` ONLY | Validates `auth.uid() IS NOT NULL`, acquires `pg_advisory_xact_lock`, checks 10/hr combined limit & 3-active quota, generates 128-bit hex ID server-side, inserts snapshot into `shared_weeks` and log into `share_creation_logs`. |
+| `public.get_shared_week` | `(text)` | `SECURITY DEFINER` | **YES** (`REVOKE ... FROM PUBLIC`) | `anon`, `authenticated` | Public snapshot lookup. Checks exact ID. If active, returns sanitized week snapshot. If deactivated, returns `{ "status": "deactivated" }` with NO user/item metadata. If missing, returns `{ "status": "not_found" }`. No list/enumeration functions. |
+| `public.create_collection` | `(text, text, text, boolean, jsonb)` | `SECURITY DEFINER` | **YES** (`REVOKE ... FROM PUBLIC`) | `authenticated` ONLY | Validates `auth.uid() IS NOT NULL` & item array length <= 50, acquires advisory lock, checks 10/hr combined limit & 3-active quota, truncates title/description, generates server-side hex ID, inserts header & items, logs creation. |
+| `public.get_shared_collection` | `(text)` | `SECURITY DEFINER` | **YES** (`REVOKE ... FROM PUBLIC`) | `anon`, `authenticated` | Public snapshot lookup. Checks exact ID. If active, returns aggregated JSON snapshot of collection + items. If deactivated, returns `{ "status": "deactivated" }` with NO item data or owner metadata. If missing, returns `{ "status": "not_found" }`. |
+
+---
+
+## 4. Rate Limiting Strategy
 
 1. **Combined Per-User Creation Limit (10 total / hour)**:
    - Enforced across **both** shared weeks and collections combined via transaction-level advisory locks in `create_shared_week` and `create_collection`.
@@ -408,7 +434,7 @@ Migrations must be applied in exact numerical order:
 
 ---
 
-## 4. Worker Routes, HTML Rendering & Security Headers
+## 5. Worker Routes, HTML Rendering & Security Headers
 
 ### API Routes
 - `POST /api/share`: Extracts Bearer token -> calls `supabase.auth.getUser(token)` -> executes `create_shared_week` RPC -> returns 201 with `{ id, url: "${APP_URL}/w/${id}" }`.
@@ -461,7 +487,7 @@ The Worker handles requests strictly based on the ID format and RPC result statu
 
 ---
 
-## 5. Wrangler & Environment Variables Configuration
+## 6. Wrangler & Environment Variables Configuration
 
 ### `wrangler.jsonc` Setup
 ```jsonc
@@ -506,7 +532,7 @@ The Worker handles requests strictly based on the ID format and RPC result statu
 
 ---
 
-## 6. Frontend Integration & Local Development
+## 7. Frontend Integration & Local Development
 
 1. **Local Worker Development**:
    - Dev dependencies include `@cloudflare/workers-types` and `wrangler`.
@@ -523,18 +549,23 @@ The Worker handles requests strictly based on the ID format and RPC result statu
 
 ---
 
-## 7. Verification & Test Plan
+## 8. Verification & Test Plan
 
 1. **Automated HTML & XSS Injection Verification**:
    - Automated Worker unit tests (`src/worker/__tests__/escaping.test.ts`) sending malicious payloads: `<script>alert(1)</script>`, `<img src=x onerror=alert(1)>`, `"><svg/onload=alert(1)>`. Verify rendered HTML output escapes `<` to `&lt;`, `>` to `&gt;`, `"` to `&quot;`.
 2. **Shell Metacharacter Safety**:
    - Input strings containing `$(id)`, `` `id` ``, `; rm -rf /`, `' OR '1'='1`, `\"`, `\\` verified to render strictly as verbatim plain text strings.
-3. **Manual Two-Account RLS Test Script (`supabase/tests/004_rls_sharing_test.sql`)**:
+3. **Manual Two-Account & RPC Permission Test Script (`supabase/tests/004_rls_sharing_test.sql`)**:
    - Uses `tests.create_supabase_user` and `tests.authenticate_as`.
-   - Verifies User A cannot read, update, or delete User B's `shared_weeks` or `collections` via direct API or SQL.
-   - Verifies User A cannot read, insert, update, or delete items in User B's `collection_items` even if they guess User B's `collection_id` or `item_id`.
-   - Verifies `anon` role receives zero rows querying `shared_weeks`, `collections`, or `collection_items` directly.
-   - Verifies `get_shared_collection` returns `{ status: 'active' }` for active IDs, `{ status: 'deactivated' }` (with NO items/user metadata) for deactivated IDs, and `{ status: 'not_found' }` for nonexistent IDs.
+   - **RPC Execution Permission Tests**:
+     - Verifies `anon` calling `create_shared_week` or `create_collection` fails with PostgreSQL exception `42501` ("permission denied for function...").
+     - Verifies `anon` calling `get_shared_week` or `get_shared_collection` succeeds.
+     - Verifies `authenticated` role can call `create_shared_week` and `create_collection`.
+   - **RLS Isolation Tests**:
+     - Verifies User A cannot read, update, or delete User B's `shared_weeks` or `collections` via direct API or SQL.
+     - Verifies User A cannot read, insert, update, or delete items in User B's `collection_items` even if they guess User B's `collection_id` or `item_id`.
+     - Verifies `anon` role receives zero rows querying `shared_weeks`, `collections`, or `collection_items` directly.
+     - Verifies `get_shared_collection` returns `{ status: 'active' }` for active IDs, `{ status: 'deactivated' }` (with NO items/user metadata) for deactivated IDs, and `{ status: 'not_found' }` for nonexistent IDs.
 4. **Concurrency & Rate Limit Integration Test Scenarios**:
    - **Simultaneous Share Creation**: Fires 5 concurrent `create_shared_week` calls for User A (who has 0 active shares). Transaction advisory lock serializes execution: requests 1, 2, 3 succeed; requests 4 and 5 fail with exception `P0002` ("Active link quota exceeded"). Exactly 3 active shares created.
    - **Simultaneous Collection Creation**: Fires 5 concurrent `create_collection` calls for User A. Lock serializes execution: 3 succeed, 2 fail. Exactly 3 active collections created.
@@ -548,20 +579,20 @@ The Worker handles requests strictly based on the ID format and RPC result statu
 
 ---
 
-## 8. Open Questions
+## 9. Open Questions
 
 1. *Cloudflare Rate Limiting Plan*: Is Cloudflare Workers Rate Limiting binding enabled on the production plan, or should Cloudflare WAF rules be configured in the dashboard? (Plan configures the binding with fallback to WAF).
 
 ---
 
-## 9. Realistic Estimated Hours
+## 10. Realistic Estimated Hours
 
 | Step | Description | Estimated Hours |
 |---|---|---|
-| **Step 1: Database Migrations & RPCs** | Correct `002_share_my_week.sql`, write `004_collections.sql`, concurrency-safe `create_shared_week` & `create_collection` RPCs with `pg_advisory_xact_lock`, combined 10/hr rate limit logging, 128-bit hex generation, public status-aware RPCs `get_shared_week` & `get_shared_collection` | 3.5 hrs |
+| **Step 1: Database Migrations & RPCs** | Correct `002_share_my_week.sql`, write `004_collections.sql`, concurrency-safe `create_shared_week` & `create_collection` RPCs with `pg_advisory_xact_lock`, explicit `REVOKE EXECUTE ON FUNCTION ... FROM PUBLIC`, schema qualification (`SET search_path = ''`), combined 10/hr rate limit logging, 128-bit hex generation, public status-aware RPCs `get_shared_week` & `get_shared_collection` | 3.5 hrs |
 | **Step 2: Cloudflare Worker Core & API Routes** | TypeScript Worker entrypoint (`src/worker/index.ts`), token verification via `getUser`, `/api/share` and `/api/collections` endpoints, `wrangler.jsonc` `run_worker_first` config | 4.0 hrs |
 | **Step 3: Worker HTML Rendering & Security Headers** | HTML renderers for `/w/:id` and `/c/:id`, strict CSP (`script-src 'none'`), status-aware 410 Gone vs 404 logic, `Cache-Control: max-age=60`, 'Report this page' and 'Plan your own week' links | 3.5 hrs |
 | **Step 4: Frontend API Integration & Import Flow** | Wire frontend API calls, token headers, error toasts for quotas/rate limits, collection import flow wiring | 2.5 hrs |
-| **Step 5: Automated & Manual Security Test Suite** | Write automated Worker HTML escaping tests, `supabase/tests/004_rls_sharing_test.sql` two-account & concurrency test script, XSS & metacharacter verification | 3.0 hrs |
+| **Step 5: Automated & Manual Security Test Suite** | Write automated Worker HTML escaping tests, `supabase/tests/004_rls_sharing_test.sql` two-account, RPC permission & concurrency test script, XSS & metacharacter verification | 3.0 hrs |
 | **Step 6: Config Validation, Cleanup & E2E Verification** | Remove `server.ts` & `data/`, validate `wrangler.jsonc` assets routing, local `wrangler dev` testing, security review | 2.5 hrs |
 | **Total** | | **19.0 hrs** |
