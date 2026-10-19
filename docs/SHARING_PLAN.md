@@ -14,6 +14,9 @@ This document is for architectural planning only. No code or deletions are perfo
   - For all other requests (e.g. static JS/CSS bundles or root `/`), the Worker delegates to `env.ASSETS.fetch(request)`.
 - **Data Access & Security Model**:
   - **Zero Public SELECT Policies**: Tables `shared_weeks`, `collections`, `collection_items`, and `share_creation_logs` have Row-Level Security (RLS) enabled with NO public `SELECT` policies.
+  - **Parent-Derived Authorization for `collection_items`**: `collection_items` contains no `user_id` column. Access control is strictly derived through parent `collections` ownership via subquery:
+    `collection_id IN (SELECT id FROM public.collections WHERE user_id = auth.uid())`.
+    This guarantees a user cannot read, insert, update, or delete items in another user's collection even if they know or guess the `collection_id` or `item_id`.
   - **Owner Writes & Operations**: Authenticated owners perform updates and deactivations using their Supabase JWT access token (`auth.uid() = user_id`).
   - **Atomic RPC Creations**: Share creation (`create_shared_week`) and collection creation (`create_collection`) are executed via `SECURITY DEFINER` RPC functions. These functions atomically verify per-user creation rate limits (max 10/hour), enforce quota limits (max 3 active shared weeks, max 3 active collections, max 50 items each), log the creation event in `share_creation_logs`, generate a 128-bit cryptographically random hex ID server-side (`encode(gen_random_bytes(16), 'hex')`), and perform the insertion.
   - **Public Snapshot Reads via Status-Aware RPCs**:
@@ -158,8 +161,67 @@ Migrations must be applied in exact numerical order:
 ### Migration `004_collections_and_collection_items.sql`
 - **Tables**:
   - `public.collections`: `id` (text PRIMARY KEY), `user_id` (uuid REFERENCES auth.users ON DELETE CASCADE), `title` (text max 80), `description` (text max 300), `display_name` (text max 40), `allow_search_engines` (boolean DEFAULT false), `is_active` (boolean DEFAULT true), `total_duration_minutes` (integer), `created_at`, `updated_at`.
-  - `public.collection_items`: `id` (text PRIMARY KEY), `collection_id` (text REFERENCES public.collections ON DELETE CASCADE), `title` (text), `source` (text), `type` (text), `duration` (integer), `duration_is_estimate` (boolean), `cover_reference` (text), `url` (text), `canonical_url` (text), `youtube_id` (text), `position` (integer). **NEVER** stores private notes or metadata.
-- **RLS & Security**: RLS enabled on both tables. `SELECT`, `UPDATE`, `DELETE`: `auth.uid() = user_id`. No public SELECT policies.
+  - `public.collection_items`: `id` (text PRIMARY KEY), `collection_id` (text REFERENCES public.collections(id) ON DELETE CASCADE), `title` (text), `source` (text), `type` (text), `duration` (integer), `duration_is_estimate` (boolean), `cover_reference` (text), `url` (text), `canonical_url` (text), `youtube_id` (text), `position` (integer). **NEVER** stores private notes or metadata.
+
+- **RLS Policies on `collections`**:
+  ```sql
+  ALTER TABLE public.collections ENABLE ROW LEVEL SECURITY;
+
+  CREATE POLICY "collections_select_policy" ON public.collections
+    FOR SELECT USING (auth.uid() = user_id);
+
+  CREATE POLICY "collections_insert_policy" ON public.collections
+    FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+  CREATE POLICY "collections_update_policy" ON public.collections
+    FOR UPDATE USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+  CREATE POLICY "collections_delete_policy" ON public.collections
+    FOR DELETE USING (auth.uid() = user_id);
+  ```
+
+- **RLS Policies on `collection_items` (Parent-Derived Authorization)**:
+  - Since `collection_items` references `collection_id` without a `user_id` column, authorization for all operations (`SELECT`, `INSERT`, `UPDATE`, `DELETE`) is explicitly derived by checking ownership of the target parent collection in `public.collections`:
+  ```sql
+  ALTER TABLE public.collection_items ENABLE ROW LEVEL SECURITY;
+
+  -- SELECT Policy: Users can only select items in collections they own
+  CREATE POLICY "collection_items_select_policy" ON public.collection_items
+    FOR SELECT USING (
+      collection_id IN (
+        SELECT c.id FROM public.collections c WHERE c.user_id = auth.uid()
+      )
+    );
+
+  -- INSERT Policy: Users can only add items into collections they own
+  CREATE POLICY "collection_items_insert_policy" ON public.collection_items
+    FOR INSERT WITH CHECK (
+      collection_id IN (
+        SELECT c.id FROM public.collections c WHERE c.user_id = auth.uid()
+      )
+    );
+
+  -- UPDATE Policy: Users can only update items in collections they own
+  CREATE POLICY "collection_items_update_policy" ON public.collection_items
+    FOR UPDATE USING (
+      collection_id IN (
+        SELECT c.id FROM public.collections c WHERE c.user_id = auth.uid()
+      )
+    ) WITH CHECK (
+      collection_id IN (
+        SELECT c.id FROM public.collections c WHERE c.user_id = auth.uid()
+      )
+    );
+
+  -- DELETE Policy: Users can only delete items from collections they own
+  CREATE POLICY "collection_items_delete_policy" ON public.collection_items
+    FOR DELETE USING (
+      collection_id IN (
+        SELECT c.id FROM public.collections c WHERE c.user_id = auth.uid()
+      )
+    );
+  ```
+
 - **Atomic Creation RPC (`create_collection`)**:
   ```sql
   CREATE OR REPLACE FUNCTION public.create_collection(
@@ -259,6 +321,7 @@ Migrations must be applied in exact numerical order:
 
   GRANT EXECUTE ON FUNCTION public.create_collection TO authenticated;
   ```
+
 - **Public Status-Aware Read RPC (`get_shared_collection`)**:
   ```sql
   CREATE OR REPLACE FUNCTION public.get_shared_collection(p_id text)
@@ -459,8 +522,9 @@ The Worker handles requests strictly based on the ID format and RPC result statu
 3. **Manual Two-Account RLS Test Script (`supabase/tests/004_rls_sharing_test.sql`)**:
    - Uses `tests.create_supabase_user` and `tests.authenticate_as`.
    - Verifies User A cannot read, update, or delete User B's `shared_weeks` or `collections` via direct API or SQL.
-   - Verifies `anon` role receives zero rows querying `shared_weeks` directly.
-   - Verifies `get_shared_week` returns `{ status: 'active' }` for active IDs, `{ status: 'deactivated' }` (with NO items/user metadata) for deactivated IDs, and `{ status: 'not_found' }` for nonexistent IDs.
+   - Verifies User A cannot read, insert, update, or delete items in User B's `collection_items` even if they guess User B's `collection_id` or `item_id`.
+   - Verifies `anon` role receives zero rows querying `shared_weeks`, `collections`, or `collection_items` directly.
+   - Verifies `get_shared_collection` returns `{ status: 'active' }` for active IDs, `{ status: 'deactivated' }` (with NO items/user metadata) for deactivated IDs, and `{ status: 'not_found' }` for nonexistent IDs.
 4. **HTTP Status Code Verification**:
    - Malformed ID (`/w/invalid..id`) -> HTTP 400 Bad Request.
    - Nonexistent ID (`/w/00000000000000000000000000000000`) -> HTTP 404 Not Found.
