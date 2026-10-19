@@ -423,14 +423,60 @@ Migrations must be applied in exact numerical order:
 
 ---
 
-## 4. Rate Limiting Strategy
+## 4. Rate Limiting Strategy & Cloudflare Binding Configuration
 
-1. **Combined Per-User Creation Limit (10 total / hour)**:
-   - Enforced across **both** shared weeks and collections combined via transaction-level advisory locks in `create_shared_week` and `create_collection`.
+### Clear Distinction: Edge IP Protection vs. Database User Quotas
+1. **Per-User Database Creation Limit (10 total / hour)**:
+   - Enforced across **both** shared weeks and collections combined via transaction-level advisory locks inside database RPCs `create_shared_week` and `create_collection`.
    - Counts total rows in `share_creation_logs` for `v_user_id` in `now() - interval '1 hour'`. If `>= 10`, returns exception `P0001` (HTTP 429 in API).
-2. **Per-IP Public Page Rate Limit**:
-   - **Chosen Method**: Cloudflare Workers Rate Limiting binding (`PUBLIC_RATE_LIMITER` binding in `wrangler.jsonc`), providing 100 req/min edge protection without querying Postgres.
-   - **Fallback**: Cloudflare Dashboard WAF Rate Limiting rules targeting `/w/*` and `/c/*` if bindings are unavailable on the Cloudflare plan.
+2. **Per-Client Edge Rate Limiting (100 req / min per IP)**:
+   - Enforced at the Cloudflare edge for public page routes `/w/*` and `/c/*` before hitting the Worker or database.
+   - **Client Identification**: Identifies clients by client IP address derived from the `CF-Connecting-IP` request header provided by Cloudflare.
+   - **Exceeded Limit Response**: When a client IP exceeds 100 requests in a 60-second window, the edge rate limiter immediately returns **HTTP 429 Too Many Requests** with header `Retry-After: 60` and body `{"error": "Too Many Requests"}` without invoking Worker compute or database RPCs.
+
+### Verified Cloudflare Rate Limiting Binding Schema (Wrangler 4.x)
+In Cloudflare Workers Rate Limiting bindings (Wrangler 4.x), `namespace_id` is an **integer string ID** (e.g. `"1001"`) assigned by Cloudflare when creating the Rate Limiting namespace via the Cloudflare Dashboard or API, rather than an arbitrary text string slug.
+
+```jsonc
+{
+  "name": "curate",
+  "main": "./src/worker/index.ts",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": [
+      "/api/*",
+      "/w/*",
+      "/c/*"
+    ]
+  },
+  "vars": {
+    "SUPABASE_URL": "",
+    "SUPABASE_PUBLISHABLE_KEY": "",
+    "APP_URL": ""
+  },
+  "ratelimits": [
+    {
+      "binding": "PUBLIC_RATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": {
+        "limit": 100,
+        "period": 60
+      }
+    }
+  ],
+  "previews": {}
+}
+```
+
+### Environment Setup & Prerequisites
+- **Workers Paid Plan Prerequisite**: Native Cloudflare Workers Rate Limiting bindings (`env.PUBLIC_RATE_LIMITER.limit({ key: ip })`) require a Cloudflare Workers Paid plan and an established Rate Limiting namespace ID in the Cloudflare Dashboard.
+- **Workers Free Plan Fallback**: If deployed on a Cloudflare Workers Free plan where Rate Limiting bindings are unavailable, the `ratelimits` block in `wrangler.jsonc` is omitted, and edge IP rate protection is configured directly via Cloudflare Dashboard **WAF Rate Limiting Rules** targeting path patterns `/w/*` and `/c/*`.
+- **Preview vs Production Environments**:
+  - In `preview` and local `wrangler dev` environments, Rate Limiting bindings are mocked in-memory or disabled to avoid rate-limiting test suites.
+  - In `production`, the namespace ID (`"1001"`) is bound in Cloudflare Dashboard and specified in `wrangler.jsonc`.
 
 ---
 
@@ -487,42 +533,7 @@ The Worker handles requests strictly based on the ID format and RPC result statu
 
 ---
 
-## 6. Wrangler & Environment Variables Configuration
-
-### `wrangler.jsonc` Setup
-```jsonc
-{
-  "name": "curate",
-  "main": "./src/worker/index.ts",
-  "compatibility_date": "2026-10-01",
-  "assets": {
-    "directory": "./dist",
-    "binding": "ASSETS",
-    "not_found_handling": "single-page-application",
-    "run_worker_first": [
-      "/api/*",
-      "/w/*",
-      "/c/*"
-    ]
-  },
-  "vars": {
-    "SUPABASE_URL": "",
-    "SUPABASE_PUBLISHABLE_KEY": "",
-    "APP_URL": ""
-  },
-  "ratelimits": [
-    {
-      "binding": "PUBLIC_RATE_LIMITER",
-      "namespace_id": "public_pages_limiter",
-      "simple": {
-        "limit": 100,
-        "period": 60
-      }
-    }
-  ],
-  "previews": {}
-}
-```
+## 6. Environment Variable Synchronization & Local Development
 
 ### Environment Variable Synchronization
 - In `wrangler.jsonc`, `vars` contains empty placeholders (`""`).
@@ -530,32 +541,25 @@ The Worker handles requests strictly based on the ID format and RPC result statu
 - Local development values are defined in `.dev.vars` (e.g. `APP_URL=http://localhost:8787`).
 - **Sync with Frontend (`VITE_APP_URL`)**: `VITE_APP_URL` in `.env` is supplied to Vite during build time for client-side absolute URL generation, while `APP_URL` is read at runtime by the Worker. Both point to the root canonical origin (e.g. `https://curate.app`).
 
----
-
-## 7. Frontend Integration & Local Development
-
-1. **Local Worker Development**:
-   - Dev dependencies include `@cloudflare/workers-types` and `wrangler`.
-   - Command `npm run preview` executes `wrangler dev` to run the Worker and static asset router locally on `http://localhost:8787`.
-   - `package.json` scripts remain unchanged:
-     - `"build": "vite build"`
-     - `"lint": "tsc --noEmit"`
-     - `"preview": "wrangler dev"`
-2. **Frontend Wiring**:
-   - API calls target same-origin `/api/share` and `/api/collections`.
-   - On HTTP 429 or 400 (quota/rate limit exceptions), the UI displays user-friendly error toasts.
-3. **Legacy Cleanup**:
-   - `server.ts` and `data/` directory will be deleted in the implementation PR following plan approval.
+### Local Worker Development
+- Dev dependencies include `@cloudflare/workers-types` and `wrangler`.
+- Command `npm run preview` executes `wrangler dev` to run the Worker and static asset router locally on `http://localhost:8787`.
+- `package.json` scripts remain unchanged:
+  - `"build": "vite build"`
+  - `"lint": "tsc --noEmit"`
+  - `"preview": "wrangler dev"`
 
 ---
 
-## 8. Verification & Test Plan
+## 7. Verification & Test Plan
 
-1. **Automated HTML & XSS Injection Verification**:
+1. **Wrangler Configuration Pre-Deployment Validation**:
+   - Prior to deployment, run `npx wrangler types` and `npx wrangler deploy --dry-run` in CI to validate `wrangler.jsonc` syntax, assets routes, and binding schemas.
+2. **Automated HTML & XSS Injection Verification**:
    - Automated Worker unit tests (`src/worker/__tests__/escaping.test.ts`) sending malicious payloads: `<script>alert(1)</script>`, `<img src=x onerror=alert(1)>`, `"><svg/onload=alert(1)>`. Verify rendered HTML output escapes `<` to `&lt;`, `>` to `&gt;`, `"` to `&quot;`.
-2. **Shell Metacharacter Safety**:
+3. **Shell Metacharacter Safety**:
    - Input strings containing `$(id)`, `` `id` ``, `; rm -rf /`, `' OR '1'='1`, `\"`, `\\` verified to render strictly as verbatim plain text strings.
-3. **Manual Two-Account & RPC Permission Test Script (`supabase/tests/004_rls_sharing_test.sql`)**:
+4. **Manual Two-Account & RPC Permission Test Script (`supabase/tests/004_rls_sharing_test.sql`)**:
    - Uses `tests.create_supabase_user` and `tests.authenticate_as`.
    - **RPC Execution Permission Tests**:
      - Verifies `anon` calling `create_shared_week` or `create_collection` fails with PostgreSQL exception `42501` ("permission denied for function...").
@@ -566,26 +570,26 @@ The Worker handles requests strictly based on the ID format and RPC result statu
      - Verifies User A cannot read, insert, update, or delete items in User B's `collection_items` even if they guess User B's `collection_id` or `item_id`.
      - Verifies `anon` role receives zero rows querying `shared_weeks`, `collections`, or `collection_items` directly.
      - Verifies `get_shared_collection` returns `{ status: 'active' }` for active IDs, `{ status: 'deactivated' }` (with NO items/user metadata) for deactivated IDs, and `{ status: 'not_found' }` for nonexistent IDs.
-4. **Concurrency & Rate Limit Integration Test Scenarios**:
+5. **Concurrency & Rate Limit Integration Test Scenarios**:
    - **Simultaneous Share Creation**: Fires 5 concurrent `create_shared_week` calls for User A (who has 0 active shares). Transaction advisory lock serializes execution: requests 1, 2, 3 succeed; requests 4 and 5 fail with exception `P0002` ("Active link quota exceeded"). Exactly 3 active shares created.
    - **Simultaneous Collection Creation**: Fires 5 concurrent `create_collection` calls for User A. Lock serializes execution: 3 succeed, 2 fail. Exactly 3 active collections created.
    - **Combined Hourly Rate Limit**: Fires 6 `create_shared_week` RPCs followed by 5 `create_collection` RPCs within 1 hour for User A. Lock serializes execution: first 10 total creations log into `share_creation_logs`; the 11th creation attempt fails with exception `P0001` ("Rate limit exceeded").
    - **Transaction Rollback Behavior**: Simulates a creation attempt where `collection_items` insertion fails midway (e.g. invalid type). The entire RPC transaction rolls back, releasing the advisory lock and undoing the `share_creation_logs` insert. Creation log count remains unaffected.
    - **Quota Recovery After Deactivation**: User A deactivates 1 of 3 active shared weeks (`is_active = false`). Active share count drops to 2. Subsequent `create_shared_week` call acquires lock, sees 2 active shares, and succeeds.
-5. **HTTP Status Code Verification**:
+6. **HTTP Status Code Verification**:
    - Malformed ID (`/w/invalid..id`) -> HTTP 400 Bad Request.
    - Nonexistent ID (`/w/00000000000000000000000000000000`) -> HTTP 404 Not Found.
    - Deactivated ID (`is_active = false`) -> HTTP 410 Gone.
 
 ---
 
-## 9. Open Questions
+## 8. Open Questions
 
-1. *Cloudflare Rate Limiting Plan*: Is Cloudflare Workers Rate Limiting binding enabled on the production plan, or should Cloudflare WAF rules be configured in the dashboard? (Plan configures the binding with fallback to WAF).
+1. *Cloudflare Rate Limiting Plan*: Is Cloudflare Workers Rate Limiting binding enabled on the production plan, or should Cloudflare WAF rules be configured in the dashboard? (Plan configures the binding schema with integer `namespace_id: "1001"` with fallback to WAF).
 
 ---
 
-## 10. Realistic Estimated Hours
+## 9. Realistic Estimated Hours
 
 | Step | Description | Estimated Hours |
 |---|---|---|
