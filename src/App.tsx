@@ -180,6 +180,72 @@ export default function App() {
     }
   };
 
+  const handleAddSelectedToCollection = async (collectionId: string) => {
+    try {
+      const col = userCollections.find((c) => c.id === collectionId);
+      if (!col) return;
+
+      const itemsToAdd = items.filter((it) => selectedItemIds.has(it.id));
+      if (itemsToAdd.length === 0) return;
+
+      const existingIds = new Set(col.items.map((i) => i.id));
+      const newItems = itemsToAdd.filter((it) => !existingIds.has(it.id));
+
+      if (newItems.length === 0) {
+        setCollectionToastMessage(`Selected items are already in "${col.title}".`);
+        return;
+      }
+
+      if (col.items.length + newItems.length > 50) {
+        setCollectionToastMessage(`Cannot add ${newItems.length} items. Maximum collection size is 50.`);
+        return;
+      }
+
+      const updatedRawItems: ContentItem[] = [
+        ...col.items.map((ci) => {
+          const match = items.find((i) => i.id === ci.id);
+          return (
+            match || {
+              id: ci.id,
+              title: ci.title,
+              source: ci.source,
+              contentType: (ci.type as ContentType) || 'other',
+              durationMinutes: ci.duration,
+              durationIsEstimate: ci.durationIsEstimate,
+              thumbnailUrl: ci.coverReference || '',
+              url: ci.url,
+              status: 'inbox' as const,
+              createdAt: col.createdAt,
+            }
+          );
+        }),
+        ...newItems,
+      ];
+
+      const snapshot = createCollectionSnapshot({
+        id: col.id,
+        userId: col.userId || currentUser?.id || 'guest-user',
+        title: col.title,
+        description: col.description,
+        displayName: col.displayName || (currentUser?.email ? currentUser.email.split('@')[0] : undefined),
+        items: updatedRawItems,
+        allowSearchEngines: col.allowSearchEngines,
+      });
+
+      await updateCollectionOnServer(col.id, {
+        items: snapshot.items as any,
+        totalDurationMinutes: snapshot.totalDurationMinutes,
+      });
+
+      loadUserCollections();
+      handleClearSelection();
+      setCollectionToastMessage(`Added ${newItems.length} items to "${col.title}"!`);
+    } catch (err) {
+      console.error('Failed to add selected items to collection:', err);
+      setCollectionToastMessage('Failed to add items to collection.');
+    }
+  };
+
   // Date navigation
   const [currentDate, setCurrentDate] = useState<Date>(() => new Date());
   const [view, setView] = useState<CalendarView>('month');
@@ -212,6 +278,7 @@ export default function App() {
   const [dayDrawerDate, setDayDrawerDate] = useState<string | null>(null);
   const [addModalInitialDate, setAddModalInitialDate] = useState<string | undefined>(undefined);
   const [addModalInitialType, setAddModalInitialType] = useState<ContentType | undefined>(undefined);
+  const [addModalInitialCollectionId, setAddModalInitialCollectionId] = useState<string | undefined>(undefined);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   // Cloud Auth & Modals
@@ -502,7 +569,8 @@ export default function App() {
   // Add Item
   const handleAddItem = (
     newItemData: Omit<ContentItem, 'id' | 'createdAt'>,
-    method: 'paste' | 'quick_add' | 'sample' = 'paste'
+    method: 'paste' | 'quick_add' | 'sample' = 'paste',
+    targetCollectionId?: string
   ) => {
     const effectiveMethod = newItemData.isSample ? 'sample' : method;
     const newItem: ContentItem = {
@@ -512,6 +580,10 @@ export default function App() {
     };
     const updated = [newItem, ...items];
     handleSaveItems(updated);
+
+    if (targetCollectionId) {
+      handleAddItemToCollection(targetCollectionId, newItem);
+    }
 
     trackEvent('item_added', {
       type: newItem.contentType,
@@ -1042,9 +1114,10 @@ export default function App() {
                 setEditingCollection(col);
                 setIsCreateCollectionOpen(true);
               }}
-              onOpenAddContent={() => {
+              onOpenAddContent={(colId?: string) => {
                 setAddModalInitialType(undefined);
                 setAddModalInitialDate(undefined);
+                setAddModalInitialCollectionId(colId);
                 setIsAddModalOpen(true);
               }}
               onNavigateToInbox={() => setIsInboxOpen(true)}
@@ -1066,6 +1139,7 @@ export default function App() {
             onScheduleDate={handleMoveItemToDate}
             onOpenAddModal={() => {
               setAddModalInitialDate(undefined);
+              setAddModalInitialCollectionId(undefined);
               setIsAddModalOpen(true);
             }}
             onMoveToInbox={handleMoveToInbox}
@@ -1082,13 +1156,18 @@ export default function App() {
       {/* Cosmos-Style Curate Modal */}
       <AddContentModal
         isOpen={isAddModalOpen}
-        onClose={() => setIsAddModalOpen(false)}
+        onClose={() => {
+          setIsAddModalOpen(false);
+          setAddModalInitialCollectionId(undefined);
+        }}
         onAdd={handleAddItem}
         availableTopics={availableTopics}
         onAddCustomTopic={handleAddCustomTopic}
         initialDate={addModalInitialDate}
         initialType={addModalInitialType}
         existingItems={items}
+        collections={userCollections}
+        initialCollectionId={addModalInitialCollectionId}
       />
 
       {/* Video Embed & Reflection Modal */}
@@ -1333,6 +1412,8 @@ export default function App() {
         selectedCount={selectedItemIds.size}
         onClearSelection={handleClearSelection}
         onCreateCollection={() => setIsCreateCollectionOpen(true)}
+        collections={userCollections}
+        onAddSelectedToCollection={handleAddSelectedToCollection}
       />
 
       {/* Create / Edit Public Collection Modal */}

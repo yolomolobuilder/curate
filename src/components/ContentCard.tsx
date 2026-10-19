@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Check, ExternalLink, Star } from 'lucide-react';
+import { Check, ExternalLink, Star, Plus } from 'lucide-react';
 import { ContentItem, getItemSource } from '../types';
 import { formatDuration } from '../lib/timeAccounting';
 import { DurationBadgeWithPicker } from './DurationEditor';
@@ -177,7 +177,7 @@ export const ContentCard: React.FC<ContentCardProps> = ({
 
         <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none" />
 
-        {/* Selection Toggle */}
+        {/* Selection Toggle: Add to Collection */}
         {onToggleSelect && (
           <button
             type="button"
@@ -185,14 +185,19 @@ export const ContentCard: React.FC<ContentCardProps> = ({
               e.stopPropagation();
               onToggleSelect(item.id, e);
             }}
-            title={isSelected ? 'Deselect item' : 'Select for collection'}
+            title={isSelected ? 'Remove from collection selection' : 'Add to collection'}
+            aria-label={isSelected ? 'Remove from collection selection' : 'Add to collection'}
             className={`absolute top-2 left-2 z-10 w-6 h-6 rounded-full flex items-center justify-center transition-all duration-200 cursor-pointer ${
               isSelected
                 ? 'bg-amber-500 text-white opacity-100 scale-100 shadow-sm ring-2 ring-white dark:ring-stone-900'
                 : 'bg-black/35 hover:bg-black/80 text-white/90 opacity-40 hover:opacity-100 group-hover:opacity-100 backdrop-blur-xs hover:scale-110 border border-white/30'
             }`}
           >
-            <Check className={`w-3.5 h-3.5 ${isSelected ? 'stroke-[3]' : ''}`} />
+            {isSelected ? (
+              <Check className="w-3.5 h-3.5 stroke-[3]" />
+            ) : (
+              <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+            )}
           </button>
         )}
 
