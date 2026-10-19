@@ -19,19 +19,23 @@ This document is for architectural planning only. No code or deletions are perfo
   - **Owner Updates & Deletions**: Authenticated owners retain direct `UPDATE` (for toggling `is_active = false` or updating display settings) and `DELETE` via RLS (`auth.uid() = user_id`).
   - **Parent-Derived Authorization**: `collection_items` has no `user_id` column; authorization for owner operations is strictly derived via parent collection ownership: `collection_id IN (SELECT id FROM public.collections WHERE user_id = auth.uid())`.
   - **Concurrency-Safe Atomic Creations**:
-    - `create_shared_week` and `create_collection` RPCs acquire an advisory lock at transaction start: `PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('user_share_lock:' || v_user_id::text));`
+    - `create_shared_week` and `create_collection` RPCs check `IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Not authenticated' USING ERRCODE = '42501';` at the top of execution.
+    - Both creation RPCs acquire an advisory lock at transaction start: `PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('user_share_lock:' || v_user_id::text));`
     - Serializes creation attempts per user, preventing race conditions on quotas (max 3 active shared weeks, max 3 active collections) and enforcing a combined rate limit (max 10 total creations/hour across both features).
     - Failed/rolled-back transactions automatically release the lock and undo rate-limit logging.
     - Server-side 128-bit random hex IDs (`pg_catalog.encode(pg_catalog.gen_random_bytes(16), 'hex')`) are generated inside the RPC.
+  - **Hardened RPC Permissions**:
+    - Creation RPCs (`create_shared_week`, `create_collection`) explicitly run `REVOKE EXECUTE ON FUNCTION ... FROM PUBLIC, anon;` followed by `GRANT EXECUTE ON FUNCTION ... TO authenticated;`.
+    - Public read RPCs (`get_shared_week`, `get_shared_collection`) explicitly run `REVOKE EXECUTE ON FUNCTION ... FROM PUBLIC;` followed by `GRANT EXECUTE ON FUNCTION ... TO anon, authenticated;`.
   - **Server-Side Snapshot Sanitization & Collection URL Validation**:
-    - Creation RPCs explicitly validate inputs (checking non-null `p_items` array, JSON types, item counts <= 50, and field types; raising `ERRCODE = '22023'` on malformed input rather than silently casting or coercing values) and construct an allowlisted snapshot payload.
-    - **Collection Content URLs Policy**: For collections, public item content URLs (`url`, `canonicalUrl`, `youtubeId`) are intentionally included in the public snapshot to enable public bookmarking and preview features. Server-side validation requires URL schemes to be `http://` or `https://`, rejects internal/private application origins, and validates `youtubeId` format (`^[a-zA-Z0-9_-]{11}$`). Private notes, internal app URLs, user metadata, or unallowlisted fields are strictly stripped server-side.
+    - Creation RPCs explicitly validate inputs (checking non-null `p_items` array, JSON types, item counts <= 50, and field types; raising `ERRCODE = '22023'` on malformed input) and construct an allowlisted snapshot payload.
+    - **Collection Content URLs Policy**: Public item content URLs (`url`, `canonicalUrl`, `youtubeId`) are intentionally included in the public snapshot to enable public bookmarking and preview features. Server-side validation requires URL schemes to be `http://` or `https://`, rejects internal/private application origins, and validates `youtubeId` format (`^[a-zA-Z0-9_-]{11}$`). Private notes, internal app URLs, user metadata, or unallowlisted fields are strictly stripped server-side.
   - **Public Reads via Status-Aware RPCs**:
     - `/w/:id` and `/c/:id` call `SECURITY DEFINER` RPCs `get_shared_week(p_id)` and `get_shared_collection(p_id)`.
     - Returns `{ "status": "not_found" }` if ID is missing (Worker serves HTTP 404).
     - Returns `{ "status": "deactivated" }` with **NO item data, notes, titles, or user metadata** if `is_active = false` (Worker serves HTTP 410).
     - Returns `{ "status": "active", ...snapshotData }` if `is_active = true` (Worker serves HTTP 200).
-    - Functions execute with `SET search_path = ''` and fully schema-qualified object references. Default `PUBLIC` execution privileges are explicitly revoked.
+    - Functions execute with `SET search_path = ''` and fully schema-qualified object references.
   - **No Service-Role Key**: Worker uses `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` exclusively.
 - **Authentication**: Worker verifies user tokens via `supabase.auth.getUser(token)` with `SUPABASE_PUBLISHABLE_KEY`. Local JWKS verification is noted as a future latency optimization.
 
@@ -72,6 +76,7 @@ Migrations must be applied in exact numerical order:
     v_elem jsonb;
     v_duration integer;
   BEGIN
+    -- Explicit unauthenticated check
     IF v_user_id IS NULL THEN
       RAISE EXCEPTION 'Not authenticated' USING ERRCODE = '42501';
     END IF;
@@ -108,7 +113,6 @@ Migrations must be applied in exact numerical order:
         RAISE EXCEPTION 'Invalid item element: expected JSON object.' USING ERRCODE = '22023';
       END IF;
 
-      -- Reject non-numeric duration instead of silently coercing
       IF v_elem ? 'duration' AND pg_catalog.jsonb_typeof(v_elem->'duration') != 'number' THEN
         RAISE EXCEPTION 'Invalid item duration: expected integer number.' USING ERRCODE = '22023';
       END IF;
@@ -146,7 +150,8 @@ Migrations must be applied in exact numerical order:
   END;
   $$;
 
-  REVOKE EXECUTE ON FUNCTION public.create_shared_week(text, text, text, text, integer, jsonb) FROM PUBLIC;
+  -- Revoke default PUBLIC and anon privileges, granting exclusively to authenticated
+  REVOKE EXECUTE ON FUNCTION public.create_shared_week(text, text, text, text, integer, jsonb) FROM PUBLIC, anon;
   GRANT EXECUTE ON FUNCTION public.create_shared_week(text, text, text, text, integer, jsonb) TO authenticated;
   ```
 
@@ -232,6 +237,7 @@ Migrations must be applied in exact numerical order:
     v_url text;
     v_yt_id text;
   BEGIN
+    -- Explicit unauthenticated check
     IF v_user_id IS NULL THEN
       RAISE EXCEPTION 'Not authenticated' USING ERRCODE = '42501';
     END IF;
@@ -284,13 +290,11 @@ Migrations must be applied in exact numerical order:
         RAISE EXCEPTION 'Invalid item element: expected JSON object.' USING ERRCODE = '22023';
       END IF;
 
-      -- Validate duration type
       IF v_elem ? 'duration' AND pg_catalog.jsonb_typeof(v_elem->'duration') != 'number' THEN
         RAISE EXCEPTION 'Invalid item duration: expected integer number.' USING ERRCODE = '22023';
       END IF;
       v_total_dur := v_total_dur + COALESCE((v_elem->>'duration')::integer, 0);
 
-      -- URL Scheme Validation & YouTube ID format check
       v_url := v_elem->>'url';
       IF v_url IS NOT NULL AND v_url !~* '^https?://' THEN
         RAISE EXCEPTION 'Invalid item URL scheme: must start with http:// or https://' USING ERRCODE = '22023';
@@ -327,7 +331,8 @@ Migrations must be applied in exact numerical order:
   END;
   $$;
 
-  REVOKE EXECUTE ON FUNCTION public.create_collection(text, text, text, boolean, jsonb) FROM PUBLIC;
+  -- Revoke default PUBLIC and anon privileges, granting exclusively to authenticated
+  REVOKE EXECUTE ON FUNCTION public.create_collection(text, text, text, boolean, jsonb) FROM PUBLIC, anon;
   GRANT EXECUTE ON FUNCTION public.create_collection(text, text, text, boolean, jsonb) TO authenticated;
   ```
 
@@ -397,12 +402,12 @@ Migrations must be applied in exact numerical order:
 
 ## 3. Function-by-Function Permission Matrix
 
-| RPC Name | Security Type | Default `PUBLIC` Revoked | Granted Roles | Intended Operations & Input Validation |
+| RPC Name | Security Type | Default `PUBLIC` & `anon` Revoked | Granted Roles | Intended Operations & Input Validation |
 |---|---|---|---|---|
-| `public.create_shared_week` | `SECURITY DEFINER` | **YES** | `authenticated` | Validates `auth.uid() IS NOT NULL`, `p_items` JSON array type, duration types; acquires advisory lock; enforces 10/hr combined limit & 3-active quota; sanitizes snapshot items; generates server-side 128-bit hex ID; inserts snapshot & log. |
-| `public.get_shared_week` | `SECURITY DEFINER` | **YES** | `anon`, `authenticated` | Public snapshot lookup by exact ID. Active -> sanitized snapshot (`status: 'active'`). Deactivated -> `{ "status": "deactivated" }` (NO user/item metadata). Missing -> `{ "status": "not_found" }`. No list functions. |
-| `public.create_collection` | `SECURITY DEFINER` | **YES** | `authenticated` | Validates `auth.uid() IS NOT NULL`, `p_items` array type & length <= 50, item duration types, URL scheme (`http://` / `https://`), and `youtubeId` format (`^[a-zA-Z0-9_-]{11}$`). Acquires lock; checks 10/hr combined limit & 3-active quota; truncates title/desc; generates server-side hex ID; inserts header & items; logs creation. |
-| `public.get_shared_collection` | `SECURITY DEFINER` | **YES** | `anon`, `authenticated` | Public snapshot lookup by exact ID. Active -> aggregated JSON snapshot of collection + items (`status: 'active'`). Deactivated -> `{ "status": "deactivated" }` (NO item/owner data). Missing -> `{ "status": "not_found" }`. |
+| `public.create_shared_week` | `SECURITY DEFINER` | **YES** (`REVOKE ... FROM PUBLIC, anon`) | `authenticated` | Validates `auth.uid() IS NOT NULL`, `p_items` JSON array type, duration types; acquires advisory lock; enforces 10/hr rate limit & 3-active quota; sanitizes snapshot items; generates server-side 128-bit hex ID; inserts snapshot & log. |
+| `public.get_shared_week` | `SECURITY DEFINER` | **YES** (`REVOKE ... FROM PUBLIC`) | `anon`, `authenticated` | Public snapshot lookup by exact ID. Active -> sanitized snapshot (`status: 'active'`). Deactivated -> `{ "status": "deactivated" }` (NO user/item metadata). Missing -> `{ "status": "not_found" }`. No list functions. |
+| `public.create_collection` | `SECURITY DEFINER` | **YES** (`REVOKE ... FROM PUBLIC, anon`) | `authenticated` | Validates `auth.uid() IS NOT NULL`, `p_items` array type & length <= 50, item duration types, URL scheme (`http://` / `https://`), and `youtubeId` format (`^[a-zA-Z0-9_-]{11}$`). Acquires lock; checks 10/hr rate limit & 3-active quota; truncates title/desc; generates server-side hex ID; inserts header & items; logs creation. |
+| `public.get_shared_collection` | `SECURITY DEFINER` | **YES** (`REVOKE ... FROM PUBLIC`) | `anon`, `authenticated` | Public snapshot lookup by exact ID. Active -> aggregated JSON snapshot of collection + items (`status: 'active'`). Deactivated -> `{ "status": "deactivated" }` (NO item/owner data). Missing -> `{ "status": "not_found" }`. |
 
 ---
 
@@ -419,6 +424,7 @@ Migrations must be applied in exact numerical order:
   "name": "curate",
   "main": "./src/worker/index.ts",
   "compatibility_date": "2026-10-01",
+  "keep_vars": true,
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
@@ -428,11 +434,6 @@ Migrations must be applied in exact numerical order:
       "/w/*",
       "/c/*"
     ]
-  },
-  "vars": {
-    "SUPABASE_URL": "",
-    "SUPABASE_PUBLISHABLE_KEY": "",
-    "APP_URL": ""
   },
   "ratelimits": [
     {
@@ -448,21 +449,20 @@ Migrations must be applied in exact numerical order:
 }
 ```
 
+### `keep_vars: true` & Variable Overwrite Prevention
+- **`vars` Block Removed**: The `vars` block is omitted from `wrangler.jsonc` and `"keep_vars": true` is configured.
+- **Why**: Defining empty `vars` in `wrangler.jsonc` causes `wrangler deploy` to overwrite production environment variables configured in the Cloudflare Dashboard (e.g., `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `APP_URL`, `SUPPORT_EMAIL`) with empty strings during CI/CD deployments. Setting `keep_vars: true` instructs Wrangler to preserve Dashboard variables across deployments.
+- Local development variables are managed in `.dev.vars` (e.g. `APP_URL=http://localhost:8787`).
+
 ---
 
-## 5. Worker Routes, HTML Rendering & Caching
+## 5. Worker Environment Variables & Security Headers
 
-### Worker Handler Logic
-- `POST /api/share` -> calls `create_shared_week` RPC -> 201 with URL.
-- `PATCH /api/share/:id` & `DELETE /api/share/:id` -> updates/deactivates via Supabase client with RLS.
-- `POST /api/collections` -> calls `create_collection` RPC -> 201 with URL.
-- `PATCH /api/collections/:id` & `DELETE /api/collections/:id` -> updates/deactivates via RLS.
-- `GET /w/:id` & `GET /c/:id`:
-  - Validates ID format (`^[a-f0-9]{32}$`). Returns 400 Bad Request for malformed/path-traversal IDs.
-  - Calls `get_shared_week(id)` or `get_shared_collection(id)` RPC.
-  - Status `'not_found'` -> HTTP 404 Not Found.
-  - Status `'deactivated'` -> HTTP 410 Gone (rendered page explaining link is deactivated, with zero private metadata).
-  - Status `'active'` -> HTTP 200 OK HTML snapshot with escaped variables.
+### Listed Worker Environment Variables
+- `SUPABASE_URL`: Base Supabase project API URL.
+- `SUPABASE_PUBLISHABLE_KEY`: Client publishable key (`sb_publishable_...`).
+- `APP_URL`: Canonical root origin (e.g. `https://curate.app`) used for generating Open Graph tags and share links. Synchronized with frontend `VITE_APP_URL`.
+- `SUPPORT_EMAIL`: Support contact address (e.g. `support@curate.app`) used dynamically for footer report links (`mailto:${SUPPORT_EMAIL}?subject=Report%20Shared%20Page%20${id}`).
 
 ### Caching Header & Freshness Target
 - **Cache Header**: `Cache-Control: public, max-age=60, s-maxage=60`
@@ -475,7 +475,7 @@ Migrations must be applied in exact numerical order:
 
 ## 6. Verification & Test Plan
 
-1. **Wrangler Pre-Deployment Validation**: Run `npx wrangler types` and `npx wrangler deploy --dry-run` to validate syntax and bindings.
+1. **Wrangler Pre-Deployment Validation**: Run `npx wrangler types` and `npx wrangler deploy --dry-run` to validate syntax, bindings, and `keep_vars` settings.
 2. **Automated Worker HTML Escaping Tests (`src/worker/__tests__/escaping.test.ts`)**: Send `<script>`, `<img onerror>`, `"><svg>` payloads and verify output escapes `<` to `&lt;`, `>` to `&gt;`, `"` to `&quot;`.
 3. **Shell Metacharacter Safety**: Verify `$(id)`, `` `id` ``, `;`, `' OR '1'='1` render strictly as plain text.
 4. **Manual Two-Account & RLS Security Script (`supabase/tests/004_rls_sharing_test.sql`)**:
@@ -486,6 +486,7 @@ Migrations must be applied in exact numerical order:
    - `get_shared_week` & `get_shared_collection` -> verify active returns snapshot, deactivated returns `{ status: 'deactivated' }` with no payload, missing returns `{ status: 'not_found' }`.
 5. **Concurrency, Input Validation & Rate Limit Tests**:
    - Malformed `p_items` input (e.g. non-array, invalid item duration type, invalid URL scheme, or malformed `youtubeId`) -> RPC throws exception `22023` ("Invalid input").
+   - Unauthenticated invocation of `create_shared_week` / `create_collection` -> RPC throws exception `42501` ("Not authenticated").
    - 5 simultaneous creation RPC calls -> advisory lock queues them; 3 succeed, 4th & 5th fail with quota error.
    - 11 creation calls in 1 hour -> 11th fails with rate limit error.
    - Failed transaction -> releases lock and rolls back creation log.
@@ -508,10 +509,6 @@ Migrations must be applied in exact numerical order:
 
 | Step | Description | Estimated Hours |
 |---|---|---|
-| **Step 1: Database Migrations & RPCs** | Correct `002_share_my_week.sql`, write `004_collections.sql`, `create_shared_week` & `create_collection` RPCs with advisory locking, strict input validation & URL scheme checks, server-side snapshot sanitization, direct INSERT blocking, explicit `REVOKE EXECUTE ... FROM PUBLIC`, schema qualification (`SET search_path = ''`), public status-aware RPCs | 3.5 hrs |
-| **Step 2: Cloudflare Worker Core & API Routes** | TypeScript Worker entrypoint (`src/worker/index.ts`), token verification via `getUser`, `/api/share` and `/api/collections` endpoints, `wrangler.jsonc` `run_worker_first` config | 4.0 hrs |
-| **Step 3: Worker HTML Rendering & Security Headers** | HTML renderers for `/w/:id` and `/c/:id`, strict CSP (`script-src 'none'`), status-aware 410 Gone vs 404 logic, `Cache-Control: max-age=60`, 'Report this page' and 'Plan your own week' links | 3.5 hrs |
-| **Step 4: Frontend API Integration & Import Flow** | Wire frontend API calls, token headers, error toasts for quotas/rate limits, collection import flow wiring | 2.5 hrs |
-| **Step 5: Automated & Manual Security Test Suite** | Write automated Worker HTML escaping tests, `supabase/tests/004_rls_sharing_test.sql` two-account, RPC permission & concurrency test script, XSS & metacharacter verification | 3.0 hrs |
-| **Step 6: Config Validation, Cleanup & E2E Verification** | Remove `server.ts` & `data/`, validate `wrangler.jsonc` assets routing, local `wrangler dev` testing, security review | 2.5 hrs |
-| **Total** | | **19.0 hrs** |
+| **Build Subtotal (Steps 1–4, 6)** | Implementation build time across database RPCs/migrations, Cloudflare Worker core & API routes, HTML renderers & security headers, frontend API integration & cleanup | **13.5 hrs** |
+| **Testing, Security Review & Config Validation (Step 5)** | Automated Worker HTML escaping tests, `supabase/tests/004_rls_sharing_test.sql` permission/RLS/concurrency test script, dry-run Wrangler validation, and security review | **5.5 hrs** |
+| **Total Estimated Effort** | | **19.0 hrs** |
