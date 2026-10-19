@@ -1,7 +1,6 @@
 import { APP_NAME } from '../types';
 import {
   saveMediaItem,
-  getMediaItem,
   getMediaItemSync,
   deleteMediaItem,
 } from './mediaStorage';
@@ -15,19 +14,6 @@ export function getCustomBrandLogo(): string | null {
     if (!stored) return null;
     if (stored.startsWith('idb:')) {
       return getMediaItemSync(stored);
-    }
-    return stored;
-  } catch {
-    return null;
-  }
-}
-
-export async function getCustomBrandLogoAsync(): Promise<string | null> {
-  try {
-    const stored = localStorage.getItem(BRAND_LOGO_KEY);
-    if (!stored) return null;
-    if (stored.startsWith('idb:')) {
-      return await getMediaItem(stored);
     }
     return stored;
   } catch {

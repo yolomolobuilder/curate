@@ -1,5 +1,8 @@
 import { ContentItem, ContentType, getItemSource } from '../types';
 import { trackEvent } from './analytics';
+import { generate128BitId } from './collections';
+
+export { generate128BitId };
 
 export interface SharedWeekItem {
   id: string;
@@ -25,25 +28,6 @@ export interface SharedWeekRecord {
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
-}
-
-/**
- * Generates a random 128-bit ID (32 hexadecimal characters).
- */
-export function generate128BitId(): string {
-  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
-    const bytes = new Uint8Array(16);
-    crypto.getRandomValues(bytes);
-    return Array.from(bytes)
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('');
-  }
-  // Fallback for non-crypto environments
-  let id = '';
-  for (let i = 0; i < 32; i++) {
-    id += Math.floor(Math.random() * 16).toString(16);
-  }
-  return id;
 }
 
 /**

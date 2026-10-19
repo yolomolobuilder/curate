@@ -1,5 +1,4 @@
 export const APP_NAME = 'Curate';
-export const PRODUCT_TITLE = 'Curate — Curate Your Curiosity.';
 
 export type ContentType =
   | 'youtube'
@@ -102,13 +101,6 @@ export interface DayTheme {
 }
 
 export type CalendarView = 'month' | 'week' | 'day';
-
-export interface FilterState {
-  topic: string;
-  contentType: string;
-  status: string; // 'all' | 'planned' | 'in_progress' | 'completed' | 'inbox'
-  searchQuery: string;
-}
 
 export const DEFAULT_TOPICS = [
   'Marketing',
