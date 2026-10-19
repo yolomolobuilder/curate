@@ -16,7 +16,13 @@ This document is for architectural planning only. No code or deletions are perfo
   - **Zero Public SELECT Policies**: Tables `shared_weeks`, `collections`, `collection_items`, and `share_creation_logs` have Row-Level Security (RLS) enabled with NO public `SELECT` policies.
   - **Owner Writes & Operations**: Authenticated owners perform updates and deactivations using their Supabase JWT access token (`auth.uid() = user_id`).
   - **Atomic RPC Creations**: Share creation (`create_shared_week`) and collection creation (`create_collection`) are executed via `SECURITY DEFINER` RPC functions. These functions atomically verify per-user creation rate limits (max 10/hour), enforce quota limits (max 3 active shared weeks, max 3 active collections, max 50 items each), log the creation event in `share_creation_logs`, generate a 128-bit cryptographically random hex ID server-side (`encode(gen_random_bytes(16), 'hex')`), and perform the insertion.
-  - **Public Reads via RPC**: Public access to active shared weeks (`/w/:id`) and collections (`/c/:id`) is provided exclusively via `SECURITY DEFINER` RPC functions (`get_shared_week(p_id)` and `get_shared_collection(p_id)`). Executed with `SET search_path = ''`, they return snapshot columns for an exact ID only when `is_active = true`, granted to `anon` and `authenticated`. No listing functions exist.
+  - **Public Snapshot Reads via Status-Aware RPCs**:
+    - Public reads to `/w/:id` and `/c/:id` call `SECURITY DEFINER` RPC functions `get_shared_week(p_id)` and `get_shared_collection(p_id)`.
+    - To allow the Worker to accurately distinguish HTTP 404 (nonexistent ID) from HTTP 410 (deactivated share link) without exposing private data, the RPC checks for the ID's existence in the database regardless of `is_active`:
+      - If ID is NOT found: Returns `status = 'not_found'` (or NULL JSON).
+      - If ID exists BUT `is_active = false`: Returns `status = 'deactivated'`, accompanied by **NO item data, notes, titles, dates, or user metadata**.
+      - If ID exists AND `is_active = true`: Returns `status = 'active'`, along with the sanitized snapshot data.
+    - These functions run with `SET search_path = ''` and are granted to `anon` and `authenticated`. No listing or enumeration functions exist.
   - **No Service-Role Key Needed**: The Worker uses `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` exclusively.
 - **Authentication**: Worker verifies user tokens via `supabase.auth.getUser(token)` using `SUPABASE_PUBLISHABLE_KEY`. Local JWKS signature verification is noted as a future latency optimization.
 
@@ -101,30 +107,45 @@ Migrations must be applied in exact numerical order:
 
   GRANT EXECUTE ON FUNCTION public.create_shared_week TO authenticated;
   ```
-- **Public Read RPC (`get_shared_week`)**:
+- **Public Status-Aware Read RPC (`get_shared_week`)**:
   ```sql
   CREATE OR REPLACE FUNCTION public.get_shared_week(p_id text)
-  RETURNS TABLE (
-    id text,
-    week_start_date text,
-    week_end_date text,
-    week_label text,
-    display_name text,
-    total_planned_minutes integer,
-    items jsonb,
-    is_active boolean,
-    created_at timestamptz
-  )
+  RETURNS jsonb
   LANGUAGE plpgsql
   SECURITY DEFINER
   SET search_path = ''
   AS $$
+  DECLARE
+    v_row record;
   BEGIN
-    RETURN QUERY
     SELECT s.id, s.week_start_date, s.week_end_date, s.week_label, s.display_name,
            s.total_planned_minutes, s.items, s.is_active, s.created_at
+    INTO v_row
     FROM public.shared_weeks s
-    WHERE s.id = p_id AND s.is_active = true;
+    WHERE s.id = p_id;
+
+    -- Case 1: ID does not exist in database -> HTTP 404
+    IF NOT FOUND THEN
+      RETURN jsonb_build_object('status', 'not_found');
+    END IF;
+
+    -- Case 2: ID exists but is deactivated -> HTTP 410 (Returns NO snapshot or user data)
+    IF NOT v_row.is_active THEN
+      RETURN jsonb_build_object('status', 'deactivated');
+    END IF;
+
+    -- Case 3: ID exists and is active -> HTTP 200
+    RETURN jsonb_build_object(
+      'status', 'active',
+      'id', v_row.id,
+      'weekStartDate', v_row.week_start_date,
+      'weekEndDate', v_row.week_end_date,
+      'weekLabel', v_row.week_label,
+      'displayName', v_row.display_name,
+      'totalPlannedMinutes', v_row.total_planned_minutes,
+      'items', v_row.items,
+      'createdAt', v_row.created_at
+    );
   END;
   $$;
 
@@ -238,7 +259,7 @@ Migrations must be applied in exact numerical order:
 
   GRANT EXECUTE ON FUNCTION public.create_collection TO authenticated;
   ```
-- **Public Collection Read RPC (`get_shared_collection`)**:
+- **Public Status-Aware Read RPC (`get_shared_collection`)**:
   ```sql
   CREATE OR REPLACE FUNCTION public.get_shared_collection(p_id text)
   RETURNS jsonb
@@ -254,12 +275,19 @@ Migrations must be applied in exact numerical order:
            c.is_active, c.total_duration_minutes, c.created_at
     INTO v_col
     FROM public.collections c
-    WHERE c.id = p_id AND c.is_active = true;
+    WHERE c.id = p_id;
 
+    -- Case 1: ID does not exist in database -> HTTP 404
     IF NOT FOUND THEN
-      RETURN NULL;
+      RETURN jsonb_build_object('status', 'not_found');
     END IF;
 
+    -- Case 2: ID exists but is deactivated -> HTTP 410 (Returns NO item data or owner info)
+    IF NOT v_col.is_active THEN
+      RETURN jsonb_build_object('status', 'deactivated');
+    END IF;
+
+    -- Case 3: ID exists and is active -> HTTP 200
     SELECT jsonb_agg(
       jsonb_build_object(
         'id', i.id,
@@ -278,6 +306,7 @@ Migrations must be applied in exact numerical order:
     WHERE i.collection_id = p_id;
 
     RETURN jsonb_build_object(
+      'status', 'active',
       'id', v_col.id,
       'title', v_col.title,
       'description', v_col.description,
@@ -316,26 +345,46 @@ Migrations must be applied in exact numerical order:
 - `POST /api/collections`: Extracts Bearer token -> calls `create_collection` RPC -> returns 201 with `{ id, url: "${APP_URL}/c/${id}" }`.
 - `PATCH /api/collections/:id`: Authenticates -> updates collection via RLS.
 - `DELETE /api/collections/:id`: Authenticates -> sets `is_active = false`.
-- `GET /api/collections/:id`: Calls `get_shared_collection(id)` RPC. Returns 410 if deactivated.
+- `GET /api/collections/:id`: Calls `get_shared_collection(id)` RPC.
 
 ### Public Server-Rendered Pages (`GET /w/:id` and `GET /c/:id`)
-- **ID Validation**: Validates ID matches `^[a-f0-9]{32}$` (128-bit hex). Returns 404 for malformed IDs.
-- **RPC Invocation**: Calls `get_shared_week` or `get_shared_collection`.
-- **410 Gone vs 404 Not Found Decision**:
-  - If the ID does not exist in the database: Returns **HTTP 404 Not Found**.
-  - If the record exists but `is_active = false`: Returns **HTTP 410 Gone** with the user-facing message: *"This week/collection is no longer shared. The owner has deactivated or removed this link."*
-- **Caching & Deactivation Delay**:
-  - `Cache-Control: public, max-age=60, s-maxage=60`
-  - *Trade-off*: Setting `max-age` to 60 seconds balances edge performance while guaranteeing that when an owner turns off or deactivates a share link, the deactivation takes effect globally within at most 60 seconds.
-- **Page Elements & Links**:
-  - **Plan Your Own Week**: Header button linking to `${APP_URL}/?ref=share`.
-  - **Report This Page**: Footer mailto link: `mailto:support@curate.app?subject=Report%20Shared%20Page%20${id}`.
-  - **Save to My Curate Import Flow**: Collection pages contain a link: `${APP_URL}/?import_collection=${id}&ref=collection`. When clicked, the SPA frontend detects `import_collection`, fetches the public JSON snapshot via `get_shared_collection(id)`, and populates the user's local Inbox or Collection builder.
-- **Strict Content Security Policy & Headers**:
-  - `Content-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://img.youtube.com https://i.ytimg.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self';`
-  - `X-Robots-Tag: noindex, nofollow` (omitted on collections if `allow_search_engines = true`).
-  - `Referrer-Policy: no-referrer`
-  - `X-Content-Type-Options: nosniff`
+
+The Worker handles requests strictly based on the ID format and RPC result status:
+
+1. **Malformed ID Handling (HTTP 400 Bad Request)**:
+   - Worker checks ID against regex `^[a-f0-9]{32}$` (128-bit hex).
+   - If ID contains path traversal (`..`), shell metacharacters, non-hex characters, or length != 32: Worker immediately returns **HTTP 400 Bad Request** without querying the database.
+2. **RPC Invocation**:
+   - Worker invokes `get_shared_week(id)` or `get_shared_collection(id)`.
+3. **Nonexistent ID Handling (HTTP 404 Not Found)**:
+   - RPC returns `{ "status": "not_found" }`.
+   - Worker returns **HTTP 404 Not Found** rendered HTML: *"Shared page not found. The link may be invalid."*
+4. **Deactivated ID Handling (HTTP 410 Gone)**:
+   - RPC returns `{ "status": "deactivated" }`.
+   - **Security Guarantees**: The RPC payload contains **no titles, dates, duration, item lists, or user metadata**.
+   - Worker returns **HTTP 410 Gone** rendered HTML: *"This week/collection is no longer shared. The owner has deactivated or removed this link."*
+5. **Active ID Handling (HTTP 200 OK)**:
+   - RPC returns `{ "status": "active", ...snapshotData }`.
+   - Worker renders full HTML snapshot with escaped variables.
+
+### Caching, Edge Invalidation & Deactivation Window
+- **Cache Header**: `Cache-Control: public, max-age=60, s-maxage=60`
+- **Revocation Window & Trade-off Analysis**:
+  - Setting `max-age` to 60 seconds ensures edge CDN nodes and browser caches revalidate public pages at least once per minute.
+  - When an owner deactivates a share link or collection, any CDN-cached 200 OK response will expire within **at most 60 seconds**.
+  - Subsequent requests after 60 seconds hit the Worker, execute `get_shared_week`/`get_shared_collection`, receive `{ "status": "deactivated" }`, and serve an un-cachable or short-cached HTTP 410 Gone response (`Cache-Control: no-cache` or `max-age=0`).
+  - This guarantees that revoked or deactivated content does not remain publicly accessible on the web beyond the intended 60-second window, while shielding the Supabase database from request surges.
+
+### Page Elements & Links
+- **Plan Your Own Week**: Header CTA button linking to `${APP_URL}/?ref=share`.
+- **Report This Page**: Footer mailto link: `mailto:support@curate.app?subject=Report%20Shared%20Page%20${id}`.
+- **Save to My Curate Import Flow**: Collection pages contain a link: `${APP_URL}/?import_collection=${id}&ref=collection`. When clicked, the SPA frontend detects `import_collection`, fetches the public JSON snapshot via `get_shared_collection(id)`, and populates the user's local Inbox or Collection builder.
+
+### Strict Content Security Policy & Headers
+- `Content-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://img.youtube.com https://i.ytimg.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self';`
+- `X-Robots-Tag: noindex, nofollow` (omitted on collections if `allow_search_engines = true`).
+- `Referrer-Policy: no-referrer`
+- `X-Content-Type-Options: nosniff`
 
 ---
 
@@ -403,18 +452,19 @@ Migrations must be applied in exact numerical order:
 
 ## 7. Verification & Test Plan
 
-1. **HTML & XSS Injection Verification**:
-   - Automated Worker tests (`src/worker/__tests__/escaping.test.ts`) sending payloads: `<script>alert(1)</script>`, `<img src=x onerror=alert(1)>`, `"><svg/onload=alert(1)>`. Verify rendered HTML escapes `<` to `&lt;`, `>` to `&gt;`, `"` to `&quot;`.
-2. **Shell Metacharacter Verification**:
-   - Input strings containing `$(id)`, `` `id` ``, `; rm -rf /`, `' OR '1'='1`, `\"`, `\\` verified to render strictly as verbatim plain text.
+1. **Automated HTML & XSS Injection Verification**:
+   - Automated Worker unit tests (`src/worker/__tests__/escaping.test.ts`) sending malicious payloads: `<script>alert(1)</script>`, `<img src=x onerror=alert(1)>`, `"><svg/onload=alert(1)>`. Verify rendered HTML output escapes `<` to `&lt;`, `>` to `&gt;`, `"` to `&quot;`.
+2. **Shell Metacharacter Safety**:
+   - Input strings containing `$(id)`, `` `id` ``, `; rm -rf /`, `' OR '1'='1`, `\"`, `\\` verified to render strictly as verbatim plain text strings.
 3. **Manual Two-Account RLS Test Script (`supabase/tests/004_rls_sharing_test.sql`)**:
    - Uses `tests.create_supabase_user` and `tests.authenticate_as`.
    - Verifies User A cannot read, update, or delete User B's `shared_weeks` or `collections` via direct API or SQL.
    - Verifies `anon` role receives zero rows querying `shared_weeks` directly.
-   - Verifies `get_shared_week` returns rows for active IDs and empty for deactivated IDs.
-4. **HTTP 410 vs 404 Tests**:
-   - Non-existent ID -> 404 Not Found.
-   - Deactivated ID (`is_active = false`) -> 410 Gone.
+   - Verifies `get_shared_week` returns `{ status: 'active' }` for active IDs, `{ status: 'deactivated' }` (with NO items/user metadata) for deactivated IDs, and `{ status: 'not_found' }` for nonexistent IDs.
+4. **HTTP Status Code Verification**:
+   - Malformed ID (`/w/invalid..id`) -> HTTP 400 Bad Request.
+   - Nonexistent ID (`/w/00000000000000000000000000000000`) -> HTTP 404 Not Found.
+   - Deactivated ID (`is_active = false`) -> HTTP 410 Gone.
 5. **Rate Limit & Quota Tests**:
    - 4th share creation attempt -> Error toast "Active link quota exceeded".
    - 11th creation attempt in 1 hour -> Error toast "Rate limit exceeded".
@@ -431,9 +481,9 @@ Migrations must be applied in exact numerical order:
 
 | Step | Description | Estimated Hours |
 |---|---|---|
-| **Step 1: Database Migrations & RPCs** | Correct `002_share_my_week.sql`, write `004_collections.sql`, `create_shared_week` & `create_collection` RPCs with 128-bit hex generation, quota & 10/hr rate limit checks, `share_creation_logs` with RLS, public RPCs `get_shared_week` & `get_shared_collection` | 3.5 hrs |
+| **Step 1: Database Migrations & RPCs** | Correct `002_share_my_week.sql`, write `004_collections.sql`, `create_shared_week` & `create_collection` RPCs with 128-bit hex generation, quota & 10/hr rate limit checks, `share_creation_logs` with RLS, public status-aware RPCs `get_shared_week` & `get_shared_collection` | 3.5 hrs |
 | **Step 2: Cloudflare Worker Core & API Routes** | TypeScript Worker entrypoint (`src/worker/index.ts`), token verification via `getUser`, `/api/share` and `/api/collections` endpoints, `wrangler.jsonc` `run_worker_first` config | 4.0 hrs |
-| **Step 3: Worker HTML Rendering & Security Headers** | HTML renderers for `/w/:id` and `/c/:id`, strict CSP (`script-src 'none'`), 410 Gone vs 404 logic, `Cache-Control: max-age=60`, 'Report this page' and 'Plan your own week' links | 3.5 hrs |
+| **Step 3: Worker HTML Rendering & Security Headers** | HTML renderers for `/w/:id` and `/c/:id`, strict CSP (`script-src 'none'`), status-aware 410 Gone vs 404 logic, `Cache-Control: max-age=60`, 'Report this page' and 'Plan your own week' links | 3.5 hrs |
 | **Step 4: Frontend API Integration & Import Flow** | Wire frontend API calls, token headers, error toasts for quotas/rate limits, collection import flow wiring | 2.5 hrs |
 | **Step 5: Automated & Manual Security Test Suite** | Write automated Worker HTML escaping tests, `supabase/tests/004_rls_sharing_test.sql` two-account script, XSS & metacharacter verification | 3.0 hrs |
 | **Step 6: Config Validation, Cleanup & E2E Verification** | Remove `server.ts` & `data/`, validate `wrangler.jsonc` assets routing, local `wrangler dev` testing, security review | 2.5 hrs |
