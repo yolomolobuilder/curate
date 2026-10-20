@@ -5,15 +5,23 @@ import { extractMetadata, EDITORIAL_COVER_PALETTES, generateEditorialCoverSvg } 
 import { getTodayStr } from '../lib/dateUtils';
 import { DurationChips } from './DurationEditor';
 
+import { SharedCollectionRecord } from '../lib/collections';
+
 interface AddContentModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onAdd: (item: Omit<ContentItem, 'id' | 'createdAt'>, method?: 'paste' | 'quick_add' | 'sample') => void;
+  onAdd: (
+    item: Omit<ContentItem, 'id' | 'createdAt'>,
+    method?: 'paste' | 'quick_add' | 'sample',
+    targetCollectionId?: string
+  ) => void;
   availableTopics: string[];
   onAddCustomTopic: (topic: string) => void;
   initialDate?: string;
   initialType?: ContentType;
   existingItems: ContentItem[];
+  collections?: SharedCollectionRecord[];
+  initialCollectionId?: string;
 }
 
 export const AddContentModal: React.FC<AddContentModalProps> = ({
@@ -24,10 +32,13 @@ export const AddContentModal: React.FC<AddContentModalProps> = ({
   onAddCustomTopic,
   initialDate,
   initialType,
+  collections = [],
+  initialCollectionId,
 }) => {
   const [urlInput, setUrlInput] = useState('');
   const [isExtracting, setIsExtracting] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [targetCollectionId, setTargetCollectionId] = useState<string>(initialCollectionId || '');
 
   // Core fields
   const [title, setTitle] = useState('');
@@ -112,13 +123,14 @@ export const AddContentModal: React.FC<AddContentModalProps> = ({
       topic: topic || undefined,
       status: isInbox ? 'inbox' : 'planned',
       scheduledDate: isInbox ? undefined : (scheduledDate || undefined),
-    }, 'paste');
+    }, 'paste', targetCollectionId || undefined);
 
     // Reset & close
     setUrlInput('');
     setTitle('');
     setThumbnailUrl('');
     setDurationIsEstimate(true);
+    setTargetCollectionId(initialCollectionId || '');
     onClose();
   };
 
@@ -326,6 +338,29 @@ export const AddContentModal: React.FC<AddContentModalProps> = ({
               </div>
             )}
           </div>
+
+          {/* Add to Collection Selector */}
+          {collections && collections.filter((c) => c.isActive).length > 0 && (
+            <div className="pt-2 border-t border-stone-200/50 dark:border-stone-800">
+              <label className="block text-[11px] font-medium text-stone-600 dark:text-stone-400 mb-1.5">
+                Add to Collection <span className="text-stone-400 font-normal">(optional)</span>
+              </label>
+              <select
+                value={targetCollectionId}
+                onChange={(e) => setTargetCollectionId(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 text-xs text-stone-900 dark:text-stone-100 focus:outline-hidden focus:ring-1 focus:ring-stone-400"
+              >
+                <option value="">None (Library only)</option>
+                {collections
+                  .filter((c) => c.isActive)
+                  .map((c) => (
+                    <option key={c.id} value={c.id}>
+                      📁 {c.title} ({c.items.length}/50 items)
+                    </option>
+                  ))}
+              </select>
+            </div>
+          )}
 
           {/* Primary Action Button */}
           <div className="pt-2">
