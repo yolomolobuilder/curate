@@ -71,31 +71,12 @@ export const TopNav: React.FC<TopNavProps> = ({
   onOpenAccountMenu,
 }) => {
   const [customLogo, setCustomLogo] = React.useState<string | null>(() => getCustomBrandLogo());
-  const [brandName, setBrandName] = React.useState<string>(() => {
-    try {
-      const stored = localStorage.getItem('curatecal_custom_brand_name_v1');
-      if (stored && stored.toLowerCase().includes('test brand')) {
-        localStorage.removeItem('curatecal_custom_brand_name_v1');
-        return APP_NAME;
-      }
-    } catch {}
-    const raw = getCustomBrandName();
-    return raw && !raw.toLowerCase().includes('test brand') ? raw : APP_NAME;
-  });
+  const [brandName, setBrandName] = React.useState<string>(() => getCustomBrandName());
 
   React.useEffect(() => {
-    try {
-      const stored = localStorage.getItem('curatecal_custom_brand_name_v1');
-      if (stored && stored.toLowerCase().includes('test brand')) {
-        localStorage.removeItem('curatecal_custom_brand_name_v1');
-        setBrandName(APP_NAME);
-      }
-    } catch {}
-
     const handleBrandUpdate = () => {
       setCustomLogo(getCustomBrandLogo());
-      const raw = getCustomBrandName();
-      setBrandName(raw && !raw.toLowerCase().includes('test brand') ? raw : APP_NAME);
+      setBrandName(getCustomBrandName());
     };
     window.addEventListener('curate:brand_updated', handleBrandUpdate);
     return () => window.removeEventListener('curate:brand_updated', handleBrandUpdate);
@@ -128,13 +109,6 @@ export const TopNav: React.FC<TopNavProps> = ({
     return currentDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   }, [currentDate, view]);
 
-  const cleanBrandName = React.useMemo(() => {
-    if (!brandName || brandName.toLowerCase().includes('test brand')) {
-      return APP_NAME;
-    }
-    return brandName;
-  }, [brandName]);
-
   return (
     <header className="sticky top-0 z-30 w-full bg-[#FAF9F6]/90 dark:bg-[#0C0C0C]/90 backdrop-blur-xl border-b border-stone-200/40 dark:border-stone-900 px-4 sm:px-8 py-3 transition-colors">
       <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
@@ -144,18 +118,18 @@ export const TopNav: React.FC<TopNavProps> = ({
             type="button"
             onClick={() => onTabChange('home')}
             className="flex items-center gap-2.5 shrink-0 cursor-pointer group focus:outline-hidden"
-            title={cleanBrandName}
-            aria-label={cleanBrandName}
+            title={brandName}
+            aria-label={brandName}
           >
             <div className="w-7 h-7 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
               {customLogo ? (
-                <img src={customLogo} alt={cleanBrandName} className="w-full h-full object-contain" />
+                <img src={customLogo} alt={brandName} className="w-full h-full object-contain" />
               ) : (
                 <CurateLogo className="w-full h-full text-stone-900 dark:text-stone-100" />
               )}
             </div>
             <span className="font-serif text-lg font-medium tracking-tight text-stone-900 dark:text-stone-100 select-none">
-              {cleanBrandName}
+              {brandName}
             </span>
           </button>
 

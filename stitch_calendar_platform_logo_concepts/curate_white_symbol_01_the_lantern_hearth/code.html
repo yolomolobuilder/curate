@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="glowWarm" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FCD34D"/>
+      <stop offset="100%" stop-color="#F59E0B"/>
+    </linearGradient>
+    <filter id="softGlow1" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="8" stdDeviation="16" flood-color="#F59E0B" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+  <!-- Curate Symbol 01: The Lantern Hearth. Pure white architectural lamp/cloche sheltering a warm glowing ember -->
+  <g transform="translate(146, 126)">
+    <!-- Arching crisp white ceramic bell/hood -->
+    <path d="M 110,20 C 50,20 10,70 10,140 L 10,230 C 10,240 20,250 30,250 L 190,250 C 200,250 210,240 210,230 L 210,140 C 210,70 170,20 110,20 Z"
+          fill="none" stroke="#FFFFFF" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Top hanger loop in white -->
+    <path d="M 90,20 C 90,6 130,6 130,20" fill="none" stroke="#FFFFFF" stroke-width="12" stroke-linecap="round"/>
+    <!-- Internal glowing ember: cozy scheduled reading flame -->
+    <circle cx="110" cy="156" r="38" fill="url(#glowWarm)" filter="url(#softGlow1)"/>
+    <circle cx="110" cy="156" r="14" fill="#FFFBEB"/>
+  </g>
+</svg>

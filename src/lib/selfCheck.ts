@@ -2207,12 +2207,6 @@ export async function runSelfCheckTests(): Promise<SelfCheckSuiteResult> {
       throw new Error(`Expected dayPreferencesEnabled false, got ${refreshedSettings.dayPreferencesEnabled}`);
     }
 
-    // Clean up test brand name
-    await store.saveSettings({
-      brandName: 'Curate',
-      dayPreferencesEnabled: true,
-    });
-
     // Delete item
     const deleteOk = await store.deleteItem('test-ds-item-1');
     if (!deleteOk) {

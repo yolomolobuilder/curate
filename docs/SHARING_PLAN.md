@@ -48,10 +48,9 @@ Migrations must be applied in exact numerical order:
 ### Migration `002_share_my_week.sql` (Corrected In-Place / Deployment Note)
 *Deployment & Transition Note*: Modifying `002_share_my_week.sql` in-place only updates fresh local databases. For deployed environments where `002` was previously run, a dedicated follow-up migration script (e.g. `002_tighten_sharing_policies.sql`) must be executed. The frontend MUST be deployed with creation RPC calls before applying policy tightening to prevent breaking direct-insert flows.
 - **Table `public.shared_weeks`**: `id` (text PRIMARY KEY), `user_id` (uuid REFERENCES auth.users ON DELETE CASCADE), `week_start_date` (text), `week_end_date` (text), `week_label` (text), `display_name` (text max 40), `total_planned_minutes` (integer), `items` (jsonb array of allowlisted fields: `id`, `title`, `source`, `type`, `duration`, `coverReference`, `day`, `dateStr`), `is_active` (boolean DEFAULT true), `created_at` (timestamptz DEFAULT now()), `updated_at` (timestamptz DEFAULT now()).
-- **Creation Logging Table `public.share_creation_logs`**: `id` (uuid PRIMARY KEY DEFAULT gen_random_uuid()), `user_id` (uuid REFERENCES auth.users ON DELETE CASCADE), `created_at` (timestamptz DEFAULT now()). RLS enabled (`auth.uid() = user_id`). No public policies. Index on `(user_id, created_at)` for fast quota/rate-limit lookups.
+- **Creation Logging Table `public.share_creation_logs`**: `id` (uuid PRIMARY KEY DEFAULT gen_random_uuid()), `user_id` (uuid REFERENCES auth.users ON DELETE CASCADE), `created_at` (timestamptz DEFAULT now()). RLS enabled (`auth.uid() = user_id`). No public policies.
 - **RLS Policies on `shared_weeks`**:
-  - `SELECT`, `DELETE`: `auth.uid() = user_id`.
-  - `UPDATE`: `auth.uid() = user_id` with check preventing reactivation beyond quota: `WITH CHECK (auth.uid() = user_id AND (is_active = false OR (SELECT pg_catalog.count(*) FROM public.shared_weeks WHERE user_id = auth.uid() AND is_active = true) <= 3))`.
+  - `SELECT`, `UPDATE`, `DELETE`: `auth.uid() = user_id`.
   - `INSERT`: Disallowed directly (`WITH CHECK (false)`). Creations must use `create_shared_week` RPC.
 - **Atomic Creation RPC (`create_shared_week`)**:
   ```sql
@@ -72,8 +71,6 @@ Migrations must be applied in exact numerical order:
     v_user_id uuid := auth.uid();
     v_recent_creations integer;
     v_active_shares integer;
-    v_item_count integer;
-    v_total_planned_minutes integer := 0;
     v_new_id text;
     v_sanitized_items jsonb := '[]'::jsonb;
     v_elem jsonb;
@@ -87,12 +84,6 @@ Migrations must be applied in exact numerical order:
     -- Strict Input Validation: p_items must be a non-null JSON array
     IF p_items IS NULL OR pg_catalog.jsonb_typeof(p_items) != 'array' THEN
       RAISE EXCEPTION 'Invalid p_items: expected a JSON array.' USING ERRCODE = '22023';
-    END IF;
-
-    -- Item limit: Shared weeks may contain at most 50 items
-    v_item_count := pg_catalog.jsonb_array_length(p_items);
-    IF v_item_count > 50 THEN
-      RAISE EXCEPTION 'Item limit exceeded: Shared weeks may contain at most 50 items.' USING ERRCODE = 'P0003';
     END IF;
 
     -- Concurrency Lock: Acquire per-user transaction advisory lock
@@ -126,7 +117,6 @@ Migrations must be applied in exact numerical order:
         RAISE EXCEPTION 'Invalid item duration: expected integer number.' USING ERRCODE = '22023';
       END IF;
       v_duration := COALESCE((v_elem->>'duration')::integer, 0);
-      v_total_planned_minutes := v_total_planned_minutes + v_duration;
 
       v_sanitized_items := v_sanitized_items || pg_catalog.jsonb_build_object(
         'id', COALESCE(v_elem->>'id', pg_catalog.encode(pg_catalog.gen_random_bytes(16), 'hex')),
@@ -143,14 +133,14 @@ Migrations must be applied in exact numerical order:
     -- Generate 128-bit random hex ID (32 chars)
     v_new_id := pg_catalog.encode(pg_catalog.gen_random_bytes(16), 'hex');
 
-    -- Insert snapshot with server-calculated total minutes
+    -- Insert snapshot
     INSERT INTO public.shared_weeks (
       id, user_id, week_start_date, week_end_date, week_label,
       display_name, total_planned_minutes, items, is_active, created_at, updated_at
     ) VALUES (
       v_new_id, v_user_id, p_week_start_date, p_week_end_date, p_week_label,
       pg_catalog.substring(pg_catalog.trim(p_display_name) from 1 for 40),
-      v_total_planned_minutes, v_sanitized_items, true, pg_catalog.now(), pg_catalog.now()
+      p_total_planned_minutes, v_sanitized_items, true, pg_catalog.now(), pg_catalog.now()
     );
 
     -- Log creation event
@@ -159,10 +149,6 @@ Migrations must be applied in exact numerical order:
     RETURN pg_catalog.jsonb_build_object('id', v_new_id, 'success', true);
   END;
   $$;
-
-  -- Index for rate limit query performance
-  CREATE INDEX IF NOT EXISTS idx_share_creation_logs_user_created
-    ON public.share_creation_logs(user_id, created_at);
 
   -- Revoke default PUBLIC and anon privileges, granting exclusively to authenticated
   REVOKE EXECUTE ON FUNCTION public.create_shared_week(text, text, text, text, integer, jsonb) FROM PUBLIC, anon;
@@ -220,8 +206,7 @@ Migrations must be applied in exact numerical order:
   - `public.collections`: `id` (text PRIMARY KEY), `user_id` (uuid REFERENCES auth.users ON DELETE CASCADE), `title` (text max 80), `description` (text max 300), `display_name` (text max 40), `allow_search_engines` (boolean DEFAULT false), `is_active` (boolean DEFAULT true), `total_duration_minutes` (integer), `created_at`, `updated_at`.
   - `public.collection_items`: `id` (text PRIMARY KEY), `collection_id` (text REFERENCES public.collections(id) ON DELETE CASCADE), `title` (text), `source` (text), `type` (text), `duration` (integer), `duration_is_estimate` (boolean), `cover_reference` (text), `url` (text), `canonical_url` (text), `youtube_id` (text), `position` (integer). **NEVER** stores private notes or metadata.
 - **RLS Policies on `collections`**:
-  - `SELECT`, `DELETE`: `auth.uid() = user_id`.
-  - `UPDATE`: `auth.uid() = user_id` with check preventing reactivation beyond quota: `WITH CHECK (auth.uid() = user_id AND (is_active = false OR (SELECT pg_catalog.count(*) FROM public.collections WHERE user_id = auth.uid() AND is_active = true) <= 3))`.
+  - `SELECT`, `UPDATE`, `DELETE`: `auth.uid() = user_id`.
   - `INSERT`: Disallowed directly (`WITH CHECK (false)`). Creations must use `create_collection` RPC.
 - **RLS Policies on `collection_items` (Parent-Derived Authorization)**:
   - `SELECT`, `UPDATE`, `DELETE`: `collection_id IN (SELECT id FROM public.collections WHERE user_id = auth.uid())`.
@@ -250,7 +235,6 @@ Migrations must be applied in exact numerical order:
     v_elem jsonb;
     v_idx integer := 0;
     v_url text;
-    v_can_url text;
     v_yt_id text;
   BEGIN
     -- Explicit unauthenticated check
@@ -293,7 +277,7 @@ Migrations must be applied in exact numerical order:
       is_active, total_duration_minutes, created_at, updated_at
     ) VALUES (
       v_new_id, v_user_id,
-      pg_catalog.substring(COALESCE(NULLIF(pg_catalog.trim(p_title), ''), 'Untitled Collection') from 1 for 80),
+      pg_catalog.substring(pg_catalog.trim(p_title) from 1 for 80),
       pg_catalog.substring(pg_catalog.trim(p_description) from 1 for 300),
       pg_catalog.substring(pg_catalog.trim(p_display_name) from 1 for 40),
       COALESCE(p_allow_search_engines, false),
@@ -316,11 +300,6 @@ Migrations must be applied in exact numerical order:
         RAISE EXCEPTION 'Invalid item URL scheme: must start with http:// or https://' USING ERRCODE = '22023';
       END IF;
 
-      v_can_url := v_elem->>'canonicalUrl';
-      IF v_can_url IS NOT NULL AND v_can_url !~* '^https?://' THEN
-        RAISE EXCEPTION 'Invalid item canonicalUrl scheme: must start with http:// or https://' USING ERRCODE = '22023';
-      END IF;
-
       v_yt_id := v_elem->>'youtubeId';
       IF v_yt_id IS NOT NULL AND v_yt_id !~ '^[a-zA-Z0-9_-]{11}$' THEN
         RAISE EXCEPTION 'Invalid youtubeId format: expected 11 alphanumeric/dash characters.' USING ERRCODE = '22023';
@@ -339,7 +318,7 @@ Migrations must be applied in exact numerical order:
         COALESCE((v_elem->>'durationIsEstimate')::boolean, false),
         v_elem->>'coverReference',
         v_url,
-        v_can_url,
+        v_elem->>'canonicalUrl',
         v_yt_id,
         v_idx
       );
@@ -425,9 +404,9 @@ Migrations must be applied in exact numerical order:
 
 | RPC Name | Security Type | Default `PUBLIC` & `anon` Revoked | Granted Roles | Intended Operations & Input Validation |
 |---|---|---|---|---|
-| `public.create_shared_week` | `SECURITY DEFINER` | **YES** (`REVOKE ... FROM PUBLIC, anon`) | `authenticated` | Validates `auth.uid() IS NOT NULL`, `p_items` JSON array type & length <= 50, duration types; acquires advisory lock; enforces 10/hr rate limit & 3-active quota; calculates `total_planned_minutes` server-side; sanitizes snapshot items; generates server-side 128-bit hex ID; inserts snapshot & log. |
+| `public.create_shared_week` | `SECURITY DEFINER` | **YES** (`REVOKE ... FROM PUBLIC, anon`) | `authenticated` | Validates `auth.uid() IS NOT NULL`, `p_items` JSON array type, duration types; acquires advisory lock; enforces 10/hr rate limit & 3-active quota; sanitizes snapshot items; generates server-side 128-bit hex ID; inserts snapshot & log. |
 | `public.get_shared_week` | `SECURITY DEFINER` | **YES** (`REVOKE ... FROM PUBLIC`) | `anon`, `authenticated` | Public snapshot lookup by exact ID. Active -> sanitized snapshot (`status: 'active'`). Deactivated -> `{ "status": "deactivated" }` (NO user/item metadata). Missing -> `{ "status": "not_found" }`. No list functions. |
-| `public.create_collection` | `SECURITY DEFINER` | **YES** (`REVOKE ... FROM PUBLIC, anon`) | `authenticated` | Validates `auth.uid() IS NOT NULL`, `p_items` array type & length <= 50, item duration types, URL scheme & canonicalUrl scheme (`http://` / `https://`), and `youtubeId` format (`^[a-zA-Z0-9_-]{11}$`). Acquires lock; checks 10/hr rate limit & 3-active quota; provides title fallback; calculates total duration server-side; generates server-side hex ID; inserts header & items; logs creation. |
+| `public.create_collection` | `SECURITY DEFINER` | **YES** (`REVOKE ... FROM PUBLIC, anon`) | `authenticated` | Validates `auth.uid() IS NOT NULL`, `p_items` array type & length <= 50, item duration types, URL scheme (`http://` / `https://`), and `youtubeId` format (`^[a-zA-Z0-9_-]{11}$`). Acquires lock; checks 10/hr rate limit & 3-active quota; truncates title/desc; generates server-side hex ID; inserts header & items; logs creation. |
 | `public.get_shared_collection` | `SECURITY DEFINER` | **YES** (`REVOKE ... FROM PUBLIC`) | `anon`, `authenticated` | Public snapshot lookup by exact ID. Active -> aggregated JSON snapshot of collection + items (`status: 'active'`). Deactivated -> `{ "status": "deactivated" }` (NO item/owner data). Missing -> `{ "status": "not_found" }`. |
 
 ---
@@ -492,20 +471,6 @@ Migrations must be applied in exact numerical order:
   - Because HTTP caching across distributed edge CDN nodes and browser caches is probabilistic, deactivation takes effect as cached representations revalidate.
   - Implementation and integration tests must explicitly verify `Cache-Control` header presence, edge revalidation, stale response handling, and deactivation behavior under simulated re-fetches rather than assuming instant zero-delay global revocation.
 
-### Security Headers & Content Security Policy (CSP)
-Public server-rendered responses for `/w/:id` and `/c/:id` set the following strict headers:
-- `Content-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://img.youtube.com https://i.ytimg.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self';`
-- `X-Content-Type-Options: nosniff`
-- `Referrer-Policy: no-referrer`
-- `X-Robots-Tag: noindex, nofollow` (omitted on collections if `allow_search_engines = true`)
-
-### Dynamic Poster & Social OG Image Strategy
-- **Background**: In `server.ts`, `/w/:id/poster.png` and `/c/:id/poster.png` invoked ImageMagick (`convert`) via `child_process.execSync` to dynamically generate PNG posters for social link unfurling. Cloudflare Workers execute inside a V8 isolate and cannot execute native shell binaries or ImageMagick.
-- **Worker Solution**:
-  - Public pages (`/w/:id` and `/c/:id`) point their `og:image` tags to the static branded image `${APP_URL}/og-image.png`.
-  - For dynamic cards, the Worker provides pure SVG poster endpoints (`/w/:id/poster.svg` and `/c/:id/poster.svg`) served with `Content-Type: image/svg+xml; charset=utf-8` and edge caching.
-  - Scrapers and social aggregators requiring raster formats receive the static `${APP_URL}/og-image.png` without requiring heavy native image processing dependencies at the edge.
-
 ---
 
 ## 6. Verification & Test Plan
@@ -533,8 +498,8 @@ Public server-rendered responses for `/w/:id` and `/c/:id` set the following str
 ## 7. PR Mergeability & Open Questions
 
 1. **GitHub PR #18 Mergeability**:
-   - Lockfile merge conflicts against `origin/main` (commit `23dae01`) have been resolved by merging `main` and regenerating `package-lock.json` with full integrity hashes.
-   - CI workflow has been updated to Node 22 with workflow concurrency cancellation.
+   - GitHub currently reports PR #18 as not mergeable due to branch divergence or merge condition state.
+   - The merge condition must be diagnosed and resolved separately in GitHub / git history prior to merging. Do not attempt to merge in this task.
 2. **Cloudflare Rate Limiting Plan**:
    - Confirm whether the target Cloudflare account is on Workers Paid (supporting `ratelimits` binding in `wrangler.jsonc`) or Workers Free (requiring WAF rate-limiting rules in Dashboard).
 
