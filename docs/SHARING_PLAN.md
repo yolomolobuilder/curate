@@ -59,6 +59,7 @@ Migrations must be applied in exact numerical order:
     p_week_end_date text,
     p_week_label text,
     p_display_name text,
+    p_total_planned_minutes integer,
     p_items jsonb
   )
   RETURNS jsonb
@@ -150,8 +151,8 @@ Migrations must be applied in exact numerical order:
   $$;
 
   -- Revoke default PUBLIC and anon privileges, granting exclusively to authenticated
-  REVOKE EXECUTE ON FUNCTION public.create_shared_week(text, text, text, text, jsonb) FROM PUBLIC, anon;
-  GRANT EXECUTE ON FUNCTION public.create_shared_week(text, text, text, text, jsonb) TO authenticated;
+  REVOKE EXECUTE ON FUNCTION public.create_shared_week(text, text, text, text, integer, jsonb) FROM PUBLIC, anon;
+  GRANT EXECUTE ON FUNCTION public.create_shared_week(text, text, text, text, integer, jsonb) TO authenticated;
   ```
 
 - **Public Status-Aware Read RPC (`get_shared_week`)**:
