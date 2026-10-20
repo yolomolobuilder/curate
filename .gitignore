@@ -8,3 +8,4 @@ bun.lockb
 yarn.lock
 pnpm-lock.yaml
 data/
+dist/
