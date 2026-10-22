@@ -131,6 +131,57 @@ export async function runSelfCheckTests(): Promise<SelfCheckSuiteResult> {
   const results: TestResult[] = [];
 
   // =========================================================================
+  // Test 0: extractYouTubeId correctly identifies different formats
+  // =========================================================================
+  try {
+    const { extractYouTubeId } = await import('./metadataExtractor');
+
+    const validCases = [
+      { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', expected: 'dQw4w9WgXcQ' },
+      { url: 'https://youtube.com/watch?v=dQw4w9WgXcQ&t=42s', expected: 'dQw4w9WgXcQ' },
+      { url: 'https://www.youtube.com/shorts/dQw4w9WgXcQ', expected: 'dQw4w9WgXcQ' },
+      { url: 'https://www.youtube.com/live/dQw4w9WgXcQ', expected: 'dQw4w9WgXcQ' },
+      { url: 'https://www.youtube.com/embed/dQw4w9WgXcQ', expected: 'dQw4w9WgXcQ' },
+      { url: 'https://youtu.be/dQw4w9WgXcQ', expected: 'dQw4w9WgXcQ' } // Add youtu.be format as well to test coverage
+    ];
+
+    for (const { url, expected } of validCases) {
+      const result = extractYouTubeId(url);
+      if (result !== expected) {
+        throw new Error(`Failed to extract ID from ${url}. Expected ${expected}, got ${result}`);
+      }
+    }
+
+    const invalidCases = [
+      'https://example.com/watch?v=dQw4w9WgXcQ',
+      'https://www.youtube.com/watch', // missing v param
+      'https://www.youtube.com/user/pewdiepie',
+      'not a url',
+    ];
+
+    for (const url of invalidCases) {
+      const result = extractYouTubeId(url);
+      if (result !== null) {
+        throw new Error(`Expected null for ${url}, got ${result}`);
+      }
+    }
+
+    results.push({
+      id: 'test-0-extract-youtube-id',
+      name: 'Extract YouTube ID: Parses watch, shorts, live, embed, and shortlink formats correctly',
+      passed: true,
+      message: 'Verified: extractYouTubeId properly returns ID for valid formats and null for invalid.',
+    });
+  } catch (err: any) {
+    results.push({
+      id: 'test-0-extract-youtube-id',
+      name: 'Extract YouTube ID: Parses watch, shorts, live, embed, and shortlink formats correctly',
+      passed: false,
+      message: err.message || String(err),
+    });
+  }
+
+  // =========================================================================
   // Test 1: A 180-minute item spread over 5 days counts 180 minutes once
   // in the week and 0 on later days.
   // =========================================================================
